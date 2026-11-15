@@ -10,7 +10,23 @@ const TONAPI = 'https://tonapi.io/v2';
 const TONCENTER = 'https://toncenter.com/api/v2';
 
 export function detectTonAddr(s: string): boolean {
-  return /^(EQ|UQ)[0-9A-Za-z_-]{46}$/.test(s) || /^0:[0-9a-fA-F]{64}$/.test(s) || /^-1:[0-9a-fA-F]{64}$/.test(s);
+  return /^(EQ|UQ)[0-9A-Za-z_-]{46}$/.test(s) || /^(?:0|-1):[0-9a-fA-F]{64}$/.test(s);
+}
+
+interface TonCenterEnvelope<T> { ok: boolean; result?: T; error?: string; }
+interface TonCenterAccount {
+  balance: string;
+  state?: string;
+  code?: string;
+  last_transaction_id?: { lt?: string; hash?: string };
+}
+interface TonCenterMessage { source?: string; destination?: string; value?: string; message?: string; }
+interface TonCenterTransaction {
+  utime?: number;
+  transaction_id?: { hash?: string; lt?: string };
+  fee?: string;
+  in_msg?: TonCenterMessage;
+  out_msgs?: TonCenterMessage[];
 }
 
 interface TonapiAccount {
@@ -75,23 +91,29 @@ export class TonAdapter implements ChainAdapter {
   }
 
   async account(addr: string): Promise<Account> {
-    const a = await fetchJson<TonapiAccount>(
-      `${TONAPI}/accounts/${addr}`,
-      { provider: 'tonapi', breaker: this.ctx.breaker },
-    );
-    const balanceNano = toNum(a.balance);
-    const isContract = !a.is_wallet && (a.get_methods?.length ?? 0) > 0;
-    return {
-      chain: 'ton',
-      addr,
-      balanceNative: balanceNano / 1e9,
-      tokens: [],
-      createdAt: a.last_activity ? undefined : undefined, // tonapi has no creation ts; filled from txs
-      lastTxTs: a.last_activity,
-      isContract,
-      provider: 'tonapi',
-      providers: ['tonapi'],
-    };
+    try {
+      const a = await fetchJson<TonapiAccount>(
+        `${TONAPI}/accounts/${addr}`,
+        { provider: 'tonapi', breaker: this.ctx.breaker },
+      );
+      const balanceNano = toNum(a.balance);
+      const isContract = !a.is_wallet && (a.get_methods?.length ?? 0) > 0;
+      return {
+        chain: 'ton', addr, balanceNative: balanceNano / 1e9, tokens: [],
+        createdAt: a.last_activity ? undefined : undefined,
+        lastTxTs: a.last_activity, isContract, provider: 'tonapi', providers: ['tonapi'],
+      };
+    } catch (primaryError) {
+      try {
+        const a = await this.tonCenter<TonCenterAccount>('getAddressInformation', { address: addr });
+        return {
+          chain: 'ton', addr, balanceNative: toNum(a.balance) / 1e9, tokens: [],
+          isContract: !!a.code, provider: 'toncenter', providers: ['toncenter'], partial: true,
+        };
+      } catch (fallbackError) {
+        throw new Error(`TON providers unavailable (tonapi: ${errorText(primaryError)}; toncenter: ${errorText(fallbackError)})`);
+      }
+    }
   }
 
   async tokens(addr: string): Promise<TokenBalance[]> {
@@ -179,6 +201,40 @@ export class TonAdapter implements ChainAdapter {
         }
       }
     } catch {
+      // TON Center can still provide native-message history. Jetton actions require
+      // TonAPI's decoded event feed, so this fallback is always explicitly partial.
+      try {
+        const rows = await this.tonCenter<TonCenterTransaction[]>('getTransactions', {
+          address: addr,
+          limit: String(limit),
+        });
+        providers.push('toncenter');
+        for (const tx of rows ?? []) {
+          const hash = tx.transaction_id?.hash ?? '';
+          const ts = Number(tx.utime ?? 0);
+          if (!hash) continue;
+          const incoming = tx.in_msg;
+          if (incoming && toNum(incoming.value) > 0) {
+            txs.push({
+              hash, chain: 'ton', ts,
+              from: incoming.source ?? '', to: addr,
+              amount: toNum(incoming.value) / 1e9, asset: 'TON', fee: 0,
+              direction: 'in', kind: 'tx', memo: incoming.message,
+            });
+          }
+          for (const outgoing of tx.out_msgs ?? []) {
+            if (toNum(outgoing.value) <= 0) continue;
+            txs.push({
+              hash, chain: 'ton', ts,
+              from: addr, to: outgoing.destination ?? '',
+              amount: toNum(outgoing.value) / 1e9, asset: 'TON', fee: 0,
+              direction: 'out', kind: 'tx', memo: outgoing.message,
+            });
+          }
+        }
+      } catch {
+        partial = true;
+      }
       partial = true;
     }
     txs.sort((a, b) => b.ts - a.ts);
@@ -223,6 +279,23 @@ export class TonAdapter implements ChainAdapter {
   async priceUsd(): Promise<number | undefined> {
     return this.ctx.prices.priceBySymbol('TON');
   }
+
+  private async tonCenter<T>(method: string, params: Record<string, string>): Promise<T> {
+    const url = new URL(`${TONCENTER}/${method}`);
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    const headers = this.ctx.cfg.toncenterKey ? { 'X-API-Key': this.ctx.cfg.toncenterKey } : undefined;
+    const response = await fetchJson<TonCenterEnvelope<T>>(url.toString(), {
+      provider: 'toncenter', breaker: this.ctx.breaker, headers,
+    });
+    if (!response.ok || response.result === undefined) {
+      throw new Error(response.error || 'invalid response');
+    }
+    return response.result;
+  }
+}
+
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message.slice(0, 100) : String(e).slice(0, 100);
 }
 
 export function classifyNft(collection: string, name: string): Nft['kind'] {
