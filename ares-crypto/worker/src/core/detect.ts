@@ -2,7 +2,7 @@
 // Never says "unknown chain" without probing.
 
 import type { ChainId, DetectCandidate, InputKind } from './types.ts';
-import { isHex64, isEvmAddr, b58decode } from './util.ts';
+import { isHex64, isEvmAddr, b58decode, tronBase58ToHex } from './util.ts';
 
 const B58_RE = /^[1-9A-HJ-NP-Za-km-z]+$/;
 
@@ -41,13 +41,13 @@ export function detectFormat(raw: string): DetectCandidate[] {
     return out;
   }
 
-  // TON user-friendly: EQ/UQ + 46 chars (48 total), or raw 0:<64hex>
-  if (/^(EQ|UQ)[0-9A-Za-z_-]{46}$/.test(s) || /^0:[0-9a-fA-F]{64}$/.test(s)) {
+  // TON mainnet user-friendly: EQ/UQ + 46 chars (48 total), or raw workchain 0/-1.
+  if (/^(EQ|UQ)[0-9A-Za-z_-]{46}$/.test(s) || /^(?:0|-1):[0-9a-fA-F]{64}$/.test(s)) {
     out.push({ kind: 'ton-addr', chains: ['ton'], clean: s });
     return out;
   }
 
-  // TRON: T + 33 base58 chars (34 total), checksum verified by adapter probe.
+  // TRON: candidate shape/version; resolveInput verifies the Base58Check checksum locally.
   if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(s)) {
     const dec = b58decode(s);
     if (dec && dec.length === 25 && dec[0] === 0x41) {
@@ -100,9 +100,25 @@ export async function resolveInput(
   }
   const first = fmt[0];
 
-  // Unambiguous address formats: single probe to confirm existence (per spec, never
-  // report "unknown chain" without trying; but format is certain — one probe is enough).
-  if (first.kind === 'tron-addr' || first.kind === 'ton-addr' || first.kind === 'btc-addr') {
+  // TON and Bitcoin address formats are chain-specific. Do not let an API outage/rate limit
+  // turn a syntactically valid address into "unrecognized input"; the report path handles errors.
+  if (first.kind === 'ton-addr' || first.kind === 'btc-addr') {
+    return { candidates: fmt, kind: first.kind, clean: first.clean, probed };
+  }
+
+  // A valid TRON Base58Check address identifies its chain without provider availability.
+  // This also lets new/unactivated wallets reach the report path instead of being rejected.
+  if (first.kind === 'tron-addr' && await tronBase58ToHex(first.clean)) {
+    return { candidates: fmt, kind: first.kind, clean: first.clean, probed };
+  }
+
+  // A 32-byte decoded key is a Solana public-key candidate and can be resolved locally.
+  if (first.kind === 'sol-b58' && b58decode(first.clean)?.length === 32) {
+    return { candidates: [{ ...first, chains: ['sol'] }], kind: first.kind, clean: first.clean, probed };
+  }
+
+  // If the TRON checksum parser rejects the candidate, use one light probe as a fallback.
+  if (first.kind === 'tron-addr') {
     const chain = first.chains[0];
     probed.push(chain);
     const ok = await registry.probe(chain, first.clean, probeTimeoutMs);
