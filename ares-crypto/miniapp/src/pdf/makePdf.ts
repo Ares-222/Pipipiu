@@ -132,4 +132,4 @@ export async function makePdf(report: WalletReport): Promise<string> {
   }
 
   return doc.output('datauristring').split(',')[1];
-}
+} 
