@@ -44,6 +44,12 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
   return btoa(bin);
 }
 
+function optionalStringField(value: unknown, key: string): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === 'string' && field.trim() ? field.trim() : undefined;
+}
+
 function labelText(label: Tx['labelFrom']): string {
   if (!label?.name) return 'публичная метка не найдена';
   const category = label.category ? ` · ${label.category}` : '';
@@ -300,7 +306,8 @@ export async function makePdf(report: WalletReport): Promise<string> {
       textBlock(`Оценка: ${cr.aml.score}/100 · ${levelRu(cr.aml.level)}`, 9, C.red);
       if (!cr.aml.hits.length) textBlock('Совпадений в подключённых источниках в этой выборке нет. Это не равно полной проверке всех санкционных и риск-баз.', 8, C.muted);
       for (const hit of cr.aml.hits) {
-        textBlock(`${hit.source}${hit.label ? ` · ${hit.label}` : ''} · ${hit.severity} · ${hit.hops === 0 ? 'прямой контакт' : `${hit.hops} хоп`} · доля объёма ${fmt(hit.volumeShare * 100, 2)}%${hit.ref ? ` · ${hit.ref}` : ''}`, 7.5);
+        const label = optionalStringField(hit, 'label');
+        textBlock(`${hit.source}${label ? ` · ${label}` : ''} · ${hit.severity} · ${hit.hops === 0 ? 'прямой контакт' : `${hit.hops} хоп`} · доля объёма ${fmt(hit.volumeShare * 100, 2)}%${hit.ref ? ` · ${hit.ref}` : ''}`, 7.5);
       }
       for (const exit of cr.aml.exchangeExit) textBlock(`Выход в сервис: ${exit.addr} · ${exit.label}`, 7.5, C.muted, 1);
       textBlock(cr.aml.disclaimer, 7.5, C.muted);
@@ -332,5 +339,4 @@ export async function makePdf(report: WalletReport): Promise<string> {
   }
 
   return doc.output('datauristring').split(',')[1];
-} 
 }
