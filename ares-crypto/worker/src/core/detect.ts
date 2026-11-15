@@ -159,6 +159,6 @@ export function suggestFixes(raw: string): string[] {
   if (/^T[0-9A-Za-z]{33}$/.test(s) && !/^[1-9A-HJ-NP-Za-km-z]+$/.test(s.slice(1))) tips.push('В адресе TRON есть недопустимые символы (0, O, I, l) — проверь копипаст.');
   if (s.length > 70) tips.push('Строка слишком длинная: возможно, вставлен не адрес, а ссылка или ключ.');
   if (/^[a-zA-Z0-9_]{4,64}$/.test(s) && !s.startsWith('@')) tips.push('Если это Telegram-юзернейм, отправь его с @: @' + s);
-  if (tips.length === 0) tips.push('Проверь, что скопирован полный адрес (или хэш) без лишних символов.'); 
+  if (tips.length === 0) tips.push('Проверь, что скопирован полный адрес (или хэш) без лишних символов.');
   return tips;
 }
