@@ -27,12 +27,14 @@ export class MemoryKV implements KVLike {
 
 // Cached JSON helpers used across adapters.
 export async function cachedJson<T>(kv: KVLike, key: string, ttlSec: number, loader: () => Promise<T>): Promise<{ value: T; hit: boolean }> {
-  const hit = await kv.get(key);
+  // KV is an optimization, not a dependency: fall through to the source if it is unavailable.
+  let hit: string | null = null;
+  try { hit = await kv.get(key); } catch { /* fail open; load fresh data */ }
   if (hit) {
     try { return { value: JSON.parse(hit) as T, hit: true }; } catch { /* fall through */ }
   }
   const value = await loader();
-  await kv.put(key, JSON.stringify(value), ttlSec);
+  try { await kv.put(key, JSON.stringify(value), ttlSec); } catch { /* cache write failure must not fail the request */ }
   return { value, hit: false };
 }
 
