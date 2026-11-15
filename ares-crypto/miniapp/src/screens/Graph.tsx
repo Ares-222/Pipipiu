@@ -11,7 +11,7 @@ const CAT_COLORS: Record<string, string> = {
 export default function Graph({ report, trace, onOpenAddr }: {
   report: WalletReport | null;
   trace: TraceResult | null;
-  onOpenAddr: (addr: string) => void;
+  onOpenAddr: (addr: string) => void; 
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
