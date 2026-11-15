@@ -234,4 +234,4 @@ export function classifyNft(collection: string, name: string): Nft['kind'] {
   return 'other';
 }
 
-export { TONCENTER };
+export { TONCENTER }; 
