@@ -9,11 +9,11 @@ crons = ["*/5 * * * *", "0 6 * * *"]   # monitor every 5 min; daily OFAC/scam sy
 [[d1_databases]]
 binding = "DB"
 database_name = "ares"
-database_id = "__D1_DATABASE_ID__"     # wrangler d1 create ares -> paste id
+database_id = "12bfcbd3-a7ed-4d9c-865f-c2358b39c0ba"     # wrangler d1 create ares -> paste id
 
 [[kv_namespaces]]
 binding = "CACHE"
-id = "__KV_CACHE_ID__"                 # wrangler kv namespace create CACHE
+id = "adb397a8acf7491d8d54614c0236d224"                 # wrangler kv namespace create CACHE
 
 [[durable_objects.bindings]]
 name = "TRACER_DO"
