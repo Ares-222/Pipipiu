@@ -31,3 +31,7 @@ new_sqlite_classes = ["TracerDO", "MonitorDO"]
 # Non-secret config; secrets go via: wrangler secret put BOT_TOKEN  etc.
 ADMIN_ID = "5188446459"
 MINIAPP_URL = "https://ares-crypto.maks222berg.workers.dev"                        # CF Pages URL of /miniapp after deploy
+[assets]
+directory = "../miniapp/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/tg-webhook", "/healthz"]
