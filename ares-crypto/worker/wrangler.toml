@@ -1,0 +1,33 @@
+name = "ares-crypto"
+main = "src/index.ts"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat_v2"]
+
+[triggers]
+crons = ["*/5 * * * *", "0 6 * * *"]   # monitor every 5 min; daily OFAC/scam sync 06:00 UTC
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ares"
+database_id = "__D1_DATABASE_ID__"     # wrangler d1 create ares -> paste id
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "__KV_CACHE_ID__"                 # wrangler kv namespace create CACHE
+
+[[durable_objects.bindings]]
+name = "TRACER_DO"
+class_name = "TracerDO"
+
+[[durable_objects.bindings]]
+name = "MONITOR_DO"
+class_name = "MonitorDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["TracerDO", "MonitorDO"]
+
+[vars]
+# Non-secret config; secrets go via: wrangler secret put BOT_TOKEN  etc.
+ADMIN_ID = "5188446459"
+MINIAPP_URL = ""                        # CF Pages URL of /miniapp after deploy

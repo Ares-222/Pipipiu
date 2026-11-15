@@ -1,0 +1,23 @@
+{
+  "name": "ares-crypto",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Ares Crypto-Analytics: Telegram bot + Mini App OSINT/analytics for crypto wallets (free-tier stack: Cloudflare Workers + D1 + KV + Durable Objects)",
+  "scripts": {
+    "bot": "node scripts/dev-polling.ts",
+    "test:core": "node scripts/test-core.ts",
+    "test:adapters": "node scripts/test-adapters.ts",
+    "test:profile": "node scripts/test-profile.ts",
+    "test:aml": "node scripts/test-aml.ts",
+    "test:tonosint": "node scripts/test-tonosint.ts",
+    "test:all": "node scripts/test-all.ts",
+    "sync:ofac": "node scripts/sync-ofac.ts",
+    "index:tornado": "node scripts/index-tornado.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  }
+}
