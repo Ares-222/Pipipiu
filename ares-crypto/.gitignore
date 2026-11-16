@@ -2,5 +2,4 @@ node_modules/
 .env
 *.log
 /tmp/
-miniapp/dist/
 wrangler.toml.bak
