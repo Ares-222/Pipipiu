@@ -173,7 +173,21 @@ export default function App() {
         />
       ) : (
         <>
-          {screen === 'home' && <Home onSearch={doSearch} loading={loading} error={error} onOpenReport={() => setScreen('report')} lastReport={report} />}
+          {screen === 'home' && (
+            <Home
+              onSearch={doSearch}
+              loading={loading}
+              error={error}
+              onOpenReport={() => setScreen('report')}
+              lastReport={report}
+              onOpenGraph={openGraph}
+              onAml={() => {
+                const addr = report?.chains[0]?.account.addr ?? report?.input;
+                if (addr) void amlFlow(addr);
+              }}
+              onNav={(s) => setScreen(s)}
+            />
+          )}
           {screen === 'report' && report && (
             <Report
               report={report}

@@ -6,15 +6,15 @@
   --surface: #131315;
   --surface2: #1A1A1D;
   --border: #232328;
-  --red: #FF2800;
+  --red: #D40000;
   --red-deep: #C21807;
   --text: #F2F2F3;
   --muted: #8A8A90;
   --ok: #22C55E;
   --warn: #F59E0B;
-  --danger: #FF2800;
+  --danger: #D40000;
   --info: #3B82F6;
-  --graph-cex: #FF2800;
+  --graph-cex: #D40000;
   --graph-mixer: #A855F7;
   --graph-bridge: #3B82F6;
   --graph-service: #38BDF8;
@@ -74,15 +74,15 @@ input:focus { border-color: var(--red); }
 
 /* Радар на экране запуска: расходящиеся кольца + вращающийся луч + красное ядро */
 .radar { position: relative; width: 136px; height: 136px; flex: none; }
-.radar-ring { position: absolute; inset: 0; border: 1.5px solid rgba(255, 40, 0, .55); border-radius: 50%; animation: radarping 2.4s cubic-bezier(.2, .6, .3, 1) infinite; }
+.radar-ring { position: absolute; inset: 0; border: 1.5px solid rgba(212, 0, 0, .55); border-radius: 50%; animation: radarping 2.4s cubic-bezier(.2, .6, .3, 1) infinite; }
 .radar-ring:nth-child(2) { animation-delay: .8s; }
 .radar-ring:nth-child(3) { animation-delay: 1.6s; }
 @keyframes radarping { 0% { transform: scale(.32); opacity: .95; } 100% { transform: scale(1.12); opacity: 0; } }
 .radar-static { position: absolute; inset: 22%; border: 1px dashed #26262C; border-radius: 50%; }
 .radar-static2 { position: absolute; inset: 38%; border: 1px solid #1F1F25; border-radius: 50%; }
-.radar-sweep { position: absolute; inset: 6px; border-radius: 50%; background: conic-gradient(from 0deg, rgba(255, 40, 0, .4), rgba(255, 40, 0, .06) 24%, transparent 34%); animation: radarsweep 1.7s linear infinite; }
+.radar-sweep { position: absolute; inset: 6px; border-radius: 50%; background: conic-gradient(from 0deg, rgba(212, 0, 0, .4), rgba(212, 0, 0, .06) 24%, transparent 34%); animation: radarsweep 1.7s linear infinite; }
 @keyframes radarsweep { to { transform: rotate(360deg); } }
-.radar-core { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--red); border-radius: 50%; box-shadow: 0 0 16px rgba(255, 40, 0, .85), 0 0 40px rgba(255, 40, 0, .35); }
+.radar-core { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--red); border-radius: 50%; box-shadow: 0 0 16px rgba(212, 0, 0, .85), 0 0 40px rgba(212, 0, 0, .35); }
 
 /* Этапы расследования */
 .stage-dot { width: 18px; height: 18px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
@@ -93,7 +93,7 @@ input:focus { border-color: var(--red); }
 
 /* Вердикт расследования */
 .verdict { border-radius: 14px; padding: 12px 14px; display: flex; gap: 10px; align-items: flex-start; }
-.verdict.bad { background: linear-gradient(135deg, rgba(255, 40, 0, .14), rgba(194, 24, 7, .08)); border: 1px solid rgba(255, 40, 0, .45); }
+.verdict.bad { background: linear-gradient(135deg, rgba(212, 0, 0, .14), rgba(194, 24, 7, .08)); border: 1px solid rgba(212, 0, 0, .45); }
 .verdict.warn { background: rgba(245, 158, 11, .09); border: 1px solid rgba(245, 158, 11, .4); }
 .verdict.ok { background: rgba(34, 197, 94, .08); border: 1px solid rgba(34, 197, 94, .35); }
 
@@ -107,7 +107,7 @@ details.guide[open] summary::before { content: '▾ '; }
 
 /* Итоговые карточки утечек */
 .leak-card { background: var(--surface); border: 1px solid var(--border); border-left-width: 3px; border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; }
-.leak-danger { background: linear-gradient(135deg, rgba(255, 40, 0, .10), rgba(26, 26, 29, .9)); border-color: rgba(255, 40, 0, .5); border-left-color: var(--red) !important; }
+.leak-danger { background: linear-gradient(135deg, rgba(212, 0, 0, .10), rgba(26, 26, 29, .9)); border-color: rgba(212, 0, 0, .5); border-left-color: var(--red) !important; }
 
 /* Визуальный язык графа (17.11: «что за адреса вне потоков») */
 .glyph-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); background: #17171C; border: 1px solid var(--border); border-radius: 999px; padding: 4px 9px; }
@@ -118,3 +118,17 @@ details.guide[open] summary::before { content: '▾ '; }
 /* Спиннер AML-досье */
 @keyframes ares-spin { to { transform: rotate(360deg); } }
 .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--border); border-top-color: var(--red); animation: ares-spin .8s linear infinite; }
+
+/* Главная в стиле мокапа №3 (выбор заказчика 17.11): CTA + список с иконками */
+.home-cta { margin-top: 12px; width: 100%; background: linear-gradient(135deg, var(--red), #8F0000); color: #fff; border: none; border-radius: 16px; padding: 14px; font-size: 15px; font-weight: 800; letter-spacing: .2px; box-shadow: 0 8px 24px rgba(212, 0, 0, .25); cursor: pointer; }
+.home-cta span { font-size: 10px; display: block; font-weight: 500; margin-top: 3px; opacity: .85; }
+.home-cta:disabled { opacity: .7; }
+.mi { display: flex; align-items: center; gap: 13px; padding: 12px 6px; border-bottom: 1px solid #1E1E24; cursor: pointer; }
+.mic { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 17px; flex-shrink: 0; }
+.ic-ok { background: rgba(0, 230, 118, .12); } .ic-red { background: rgba(212, 0, 0, .13); } .ic-teal { background: rgba(85, 214, 190, .13); }
+.ic-blue { background: rgba(95, 176, 255, .13); } .ic-amber { background: rgba(245, 158, 11, .13); } .ic-purple { background: rgba(139, 92, 246, .13); }
+.mi b { font-size: 14px; display: block; }
+.mi i { font-style: normal; font-size: 10.5px; color: var(--muted); display: block; margin-top: 2px; }
+.chev { color: #4A4A52; font-size: 16px; }
+.badge-new { font-size: 9px; background: rgba(85, 214, 190, .15); color: #55D6BE; border: 1px solid rgba(85, 214, 190, .4); border-radius: 99px; padding: 3px 8px; font-weight: 700; }
+.badge-red { font-size: 9px; background: rgba(212, 0, 0, .14); color: #FF6B57; border: 1px solid rgba(212, 0, 0, .4); border-radius: 99px; padding: 3px 8px; font-weight: 700; }

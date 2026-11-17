@@ -1,7 +1,7 @@
 import { fmt, short, type ChainReport, type Tx } from '../api';
 
 const C = {
-  bg: '#0A0A0B', panel: '#131315', border: '#29292F', red: '#FF2800',
+  bg: '#0A0A0B', panel: '#131315', border: '#29292F', red: '#D40000',
   text: '#F2F2F3', muted: '#8A8A90', incoming: '#55D6BE', outgoing: '#FF9E42',
 };
 

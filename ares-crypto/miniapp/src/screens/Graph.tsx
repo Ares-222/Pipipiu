@@ -17,7 +17,7 @@ import { haptic } from '../tg';
 // личный/неопознанный. Цвета различимы между собой.
 const CAT_COLORS: Record<string, string> = {
   cex: '#3B82F6', tgbots: '#EC4899', service: '#2DD4BF', payment: '#F59E0B', bridge: '#8B5CF6',
-  mixer: '#FF2800', scam: '#FF4D6D', sanctioned: '#E5E7EB', contract: '#6B7280',
+  mixer: '#D40000', scam: '#FF4D6D', sanctioned: '#E5E7EB', contract: '#6B7280',
   token: '#10B981', personal: '#9CA3AF',
 };
 const CAT_ORDER = ['cex', 'tgbots', 'service', 'payment', 'bridge', 'mixer', 'scam', 'sanctioned', 'contract', 'token', 'personal'];
@@ -166,7 +166,7 @@ export default function Graph({ report, trace, onOpenAddr }: {
         data: {
           id: n.id,
           label: nodeLabel(n, hop1Ids.has(n.id), hubIds.has(n.id)),
-          color: n.isRoot ? '#FF2800' : colorOf(n), // цель — красное ядро, как на радаре запуска
+          color: n.isRoot ? '#D40000' : colorOf(n), // цель — красное ядро, как на радаре запуска
           size: Math.max(18, Math.min(52, 14 + Math.sqrt(Math.max(1, n.volume)) * 0.16)),
           marked: (!!n.category && n.category !== 'personal') || !!n.probable,
         },
@@ -224,9 +224,9 @@ export default function Graph({ report, trace, onOpenAddr }: {
         { selector: 'node.is-root', style: {
           'border-width': 3.5,
           'border-style': 'solid',
-          'border-color': '#FF2800',
+          'border-color': '#D40000',
           'shadow-blur': 22,
-          'shadow-color': '#FF2800',
+          'shadow-color': '#D40000',
           'shadow-opacity': 0.85,
         } as cytoscape.Css.Node },
         { selector: 'edge', style: {
