@@ -8,7 +8,7 @@ import type { AppCtx } from '../core/ctx.ts';
 import type { AdapterRegistry } from '../adapters/registry.ts';
 import { fetchCount, resetFetchCount } from '../core/http.ts';
 import { LabelEngine } from './labels.ts';
-import { fmtAmount } from '../core/util.ts';
+import { buildUnmix } from './unmix.ts';
 
 export interface TraceOpts {
   depth?: number;         // default 2 (1..4)
@@ -17,8 +17,6 @@ export interface TraceOpts {
   onProgress?: (step: number, totalSteps: number, expanded: number, note: string) => void;
   unmix?: boolean;        // default true
 }
-
-const MIXER_WINDOW_SEC = 24 * 3600;
 
 export async function runTrace(
   ctx: AppCtx,
@@ -173,7 +171,7 @@ export async function runTrace(
   // unmix (statistical matching, spec §11.4)
   const unmixFindings: UnmixFinding[] = [];
   for (const m of mixerNodes.slice(0, 3)) {
-    const u = await unmixMixer(ctx, chain, m.addr, root, visited);
+    const u = await unmixMixer(ctx, chain, m.addr, root, visited, [...edges.values()].map((e) => ({ from: e.from, to: e.to, amount: e.amount, asset: e.asset })));
     if (u) unmixFindings.push(u);
   }
 
@@ -203,37 +201,18 @@ export async function runTrace(
   };
 }
 
-async function unmixMixer(ctx: AppCtx, chain: string, mixer: string, rootAddr: string, _visited: Set<string>): Promise<UnmixFinding | null> {
-  // Deposits INTO mixer by our graph addresses (from index built by scripts/index-tornado.ts)
-  // and withdrawals OUT of mixer in matching windows (same table, kind prefix 'w:').
-  const all = await ctx.db.listAmlSources(500);
-  void all;
-  const deposits = await ctx.db.getMixerDeposits(chain, mixer, 0, Math.floor(Date.now() / 1000));
-  // deposits made by graph addresses
-  const byAddr = deposits.filter((d) => d.commitment.startsWith('d:') && d.addr && (_visited.has(d.addr) || d.addr === rootAddr));
-  if (byAddr.length === 0) return null;
-
+async function unmixMixer(ctx: AppCtx, chain: string, mixer: string, rootAddr: string, visited: Set<string>, graphEdges: { from: string; to: string; amount: number; asset: string }[]): Promise<UnmixFinding | null> {
+  // v6: скоринг по методологии открытых исследований (arXiv 2510.09433 H1/H2/H3 +
+  // SlowMist-сходимость + база 1/n) поверх накопительного D1-индекса крон-коллектора
+  // mixindex.ts (раньше индекс наполнялся только ручным scripts/index-tornado.ts).
+  const nowSec = Math.floor(Date.now() / 1000);
+  const deposits = await ctx.db.getMixerDeposits(chain, mixer, 0, nowSec);
   const withdrawals = deposits.filter((d) => d.commitment.startsWith('w:'));
-  const links: UnmixFinding['links'] = [];
-  for (const dep of byAddr) {
-    // candidate outputs: same nominal, withdrawal after deposit, within window
-    const cands = withdrawals.filter((w) =>
-      Math.abs(w.amount - dep.amount) < 1e-9 && w.ts >= dep.ts && w.ts - dep.ts <= MIXER_WINDOW_SEC);
-    if (cands.length === 0) continue;
-    const p = 1 / cands.length; // classic statistical matching: 1/n same-nominal outputs in window
-    for (const w of cands.slice(0, 4)) {
-      links.push({ from: dep.addr ?? '', to: w.addr ?? '', amount: w.amount, p });
-    }
-  }
-  if (links.length === 0) return null;
-  return {
-    mixer,
-    mixerLabel: 'Миксер',
-    deposits: byAddr.map((d) => ({ addr: d.addr ?? '', amount: d.amount, ts: d.ts })),
-    outputs: withdrawals.slice(0, 20).map((w) => ({ addr: w.addr ?? '', amount: w.amount, ts: w.ts })),
-    links,
-    note: `Матчинг депозит→вывод в окне 24 ч по номиналу (${fmtAmount(byAddr[0].amount)}). Вероятность = 1/n совпадающих выводов. Вероятностная эвристика, не доказательство.`,
-  };
+  const graphAddrs = new Set([...visited, rootAddr].map((a) => normAddr(chain, a)));
+  return buildUnmix({
+    chain, mixer, mixerLabel: 'Миксер', rootAddr, graphAddrs,
+    edges: graphEdges, deposits, withdrawals, nowSec,
+  });
 }
 
 function nodeId(chain: string, addr: string): string {

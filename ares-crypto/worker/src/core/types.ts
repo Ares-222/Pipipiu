@@ -311,7 +311,7 @@ export interface UnmixFinding {
   mixerLabel?: string;
   deposits: { addr: string; amount: number; ts: number }[];
   outputs: { addr: string; amount: number; ts: number }[];
-  links: { from: string; to: string; amount: number; p: number }[];
+  links: { from: string; to: string; amount: number; p: number; method?: string; looped?: boolean }[];
   note: string;
 }
 

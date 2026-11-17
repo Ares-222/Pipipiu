@@ -14,6 +14,7 @@ import { BotApi } from './tg/bot.ts';
 import { handleUpdate } from './tg/router.ts';
 import { handleApi } from './api/routes.ts';
 import { monitorCycle } from './engine/monitor.ts';
+import { collectMixerIndex } from './engine/mixindex.ts';
 import { syncOfac, syncScamSniffer, downloadOfac, downloadScamSniffer } from './engine/feeds.ts';
 import type { TgUpdate } from './tg/bot-types.ts';
 import { TracerDO } from './do/tracer-do.ts';
@@ -139,6 +140,15 @@ export default {
       }
     } catch (e) {
       await ctx.db.addErrorLog('cron-monitor', String((e as Error).message));
+    }
+
+    // v6: индекс миксеров (распутыватель блендера) — одна цепь за запуск,
+    // ≤ 11 внешних подзапросов, не мешает monitor-проходу. Тихий успех = null.
+    try {
+      const st = await collectMixerIndex(ctx);
+      if (st?.startsWith('ERROR')) await ctx.db.addErrorLog('cron-mixindex', st);
+    } catch (e) {
+      await ctx.db.addErrorLog('cron-mixindex', String((e as Error).message));
     }
   },
 };

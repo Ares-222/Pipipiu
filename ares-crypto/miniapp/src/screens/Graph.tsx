@@ -421,7 +421,7 @@ export default function Graph({ report, trace, onOpenAddr }: {
                 {u.links.slice(0, 6).map((l, j) => (
                   <div key={j} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 12, marginTop: 6 }}>
                     <span className="mono" style={{ color: 'var(--info)', cursor: 'pointer' }} onClick={() => onOpenAddr(l.from)}>{short(l.from, 6, 4)}</span>
-                    <span className="mono" style={{ color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmt(l.amount)} · связь ~{Math.round(l.p * 100)}%</span>
+                    <span className="mono" style={{ color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmt(l.amount)} · связь ~{Math.round(l.p * 100)}%{l.method ? ` · ${l.method.split(' ')[0]}` : ''}{l.looped ? ' ↻' : ''}</span>
                     <span className="mono" style={{ color: 'var(--warn)', cursor: 'pointer' }} onClick={() => onOpenAddr(l.to)}>{short(l.to, 6, 4)}</span>
                   </div>
                 ))}

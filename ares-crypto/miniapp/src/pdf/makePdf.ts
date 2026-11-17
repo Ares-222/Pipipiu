@@ -519,14 +519,15 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
     const unmixList = (trace.unmix ?? []) as UnmixFinding[];
     if (unmixList.length) {
       section('Распутывание миксеров · unmix-матчинг');
-      textBlock('Статистическое сопоставление депозитов и выводов через миксер: вероятность пары = 1/n совпадающих выводов в временном окне. Оценка вероятностная, не доказательство.', 7.5, C.muted, 4);
+      textBlock('Сопоставление депозитов и выводов через миксер по методологии открытых исследований (arXiv 2510.09433): H1 — переиспользование адреса (0.9), H2 — прямой перевод между сторонами (0.75), H3 — FIFO по времени того же номинала (0.2–0.35); нижняя граница — классическая база 1/n в окне 24 ч. Балансовая сходимость — приём SlowMist. Оценка вероятностная, не доказательство.', 7.5, C.muted, 4);
       for (const u of unmixList) {
         textBlock(`🌀 ${u.mixerLabel ?? 'Миксер'} · ${short(u.mixer, 8, 6)}`, 8.5, BADC, 1);
         if (u.note) textBlock(u.note, 7, C.muted, 2);
-        const widthsU = [0.34, 0.34, 0.17, 0.15];
-        tableRow(['ДЕПОЗИТ', 'ВЫВОД', 'СУММА', 'СВЯЗЬ'], widthsU, [C.muted, C.muted, C.muted, C.muted], 7);
+        const widthsU = [0.3, 0.3, 0.14, 0.13, 0.13];
+        tableRow(['ДЕПОЗИТ', 'ВЫВОД', 'СУММА', 'СВЯЗЬ', 'МЕТОД'], widthsU, [C.muted, C.muted, C.muted, C.muted, C.muted], 7);
         for (const l of u.links.slice(0, 6)) {
-          tableRow([short(l.from, 10, 8), short(l.to, 10, 8), fmt(l.amount, 2), `~${Math.round(l.p * 100)}%`], widthsU, [C.white, C.white, C.white, C.warning]);
+          const meth = (l.method ?? '1/n').split(' ')[0] + (l.looped ? ' ↻' : '');
+          tableRow([short(l.from, 10, 8), short(l.to, 10, 8), fmt(l.amount, 2), `~${Math.round(l.p * 100)}%`, meth], widthsU, [C.white, C.white, C.white, C.warning, C.muted]);
         }
         y += 4;
       }
