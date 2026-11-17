@@ -1,9 +1,11 @@
 // Крон-коллектор индекса миксеров (v6, ограничение: лимиты Cloudflare).
-// Каждый запуск */5 обрабатывает ОДНУ цепь (round-robin): ≤ 4 getLogs + ≤ 6
-// txFrom + 1 eth_blockNumber — умещается в бюджет подзапросов воркера рядом
-// с monitor-проходом. Etherscan V2 free: ~5 вызовов/сек, 100к/день — нагрузка
-// ~1500/день. Чекпоинты в KV (mixidx:<chainId>:<addr>), события — в D1
-// tx_deposits (INSERT OR IGNORE, дубли безопасны).
+// Каждый запуск */5 обрабатывает ОДНУ цепь (round-robin): ≤ 4 getLogs + ≤ 4
+// txFrom + ≤ 8 block-timestamps + 1 blockNumber — умещается в бюджет подзапросов
+// воркера рядом с monitor-проходом.
+// Два режима: c ETHERSCAN_KEY — Etherscan V2 (stable, ~1500 вызовов/день);
+// без ключа (прод по умолчанию) — безключевые публичные JSON-RPC из RPC_URL
+// (те же эндпоинты, что у адаптеров проекта). Чекпоинты в KV, события в D1
+// tx_deposits (INSERT OR IGNORE — дубли безопасны).
 // Семантика событий сверена по getabi/keccak (см. scripts/index-tornado.ts):
 //   Deposit(bytes32,uint32,uint256) — депонент НЕ в событии, берётся tx.from;
 //   Withdrawal(address,bytes32,address,uint256) — выводящий = первое data-слово.
@@ -15,6 +17,14 @@ import type { AppCtx } from '../core/ctx.ts';
 const ES = 'https://api.etherscan.io/v2/api';
 const TOPIC_DEPOSIT = '0xa945e51eec50ab98c161376f0db4cf2aeba3ec92755fe2fcd388bdbbb80ff196';
 const TOPIC_WITHDRAW = '0xe9e508bad6d4c3227e881ca19068f099da81b5164dd6d62b2eaf1e8bc6c34931';
+
+// Безключевые RPC — списки с фолбэком (первый доступный из эфгресса CF;
+// cloudflare-eth.com — официальный шлюз Cloudflare, стабилен из воркеров).
+const RPC_URLS: Record<string, string[]> = {
+  eth: ['https://cloudflare-eth.com', 'https://eth.llamarpc.com', 'https://ethereum-rpc.publicnode.com'],
+  bsc: ['https://bsc-dataseed.binance.org', 'https://bsc-rpc.publicnode.com'],
+  polygon: ['https://polygon-rpc.com', 'https://polygon-bor-rpc.publicnode.com'],
+};
 
 interface LogRow { address: string; topics: string[]; blockNumber: string; timeStamp: string; transactionHash: string; data: string; }
 
@@ -37,13 +47,15 @@ export const TORNADO_INSTANCES: { chain: string; chainId: number; addr: string; 
   { chain: 'polygon', chainId: 137, addr: '0xa5c2254e4253490c54cef0a4347fddb8f75a4998', nominal: 100000 },
 ];
 
-const CHUNK = 300;          // безопасный диапазон getLogs для free-ключа (замер скриптом)
-const DEP_CAP = 6;          // максимум txFrom-запросов за один запуск
+const CHUNK = 300;          // безопасный диапазон getLogs для free-ключа/публичных RPC
+const DEP_CAP = 4;          // максимум txFrom-запросов за один запуск
+const TS_CAP = 8;           // максимум eth_getBlockByNumber за запуск (RPC-режим)
 const INIT_LOOKBACK = 3000; // стартовое окно наблюдения ≈ 10 ч ETH-блоков
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const hex = (n: number) => '0x' + n.toString(16);
 
-async function getLogs(key: string, chainId: number, address: string, from: number, to: number): Promise<LogRow[]> {
+async function esLogs(key: string, chainId: number, address: string, from: number, to: number): Promise<LogRow[]> {
   const r = await fetchJson<{ status: string; result: LogRow[] | string }>(
     `${ES}?chainid=${chainId}&module=logs&action=getLogs&fromBlock=${from}&toBlock=${to}&address=${address}&apikey=${key}`,
     { provider: 'etherscan:logs', timeoutMs: 25000, retries: 1 },
@@ -51,27 +63,74 @@ async function getLogs(key: string, chainId: number, address: string, from: numb
   return Array.isArray(r.result) ? r.result : [];
 }
 
-async function txFrom(key: string, chainId: number, hash: string): Promise<string> {
-  const r = await fetchJson<{ result: { from: string } | null }>(
-    `${ES}?chainid=${chainId}&module=proxy&action=eth_getTransactionByHash&txhash=${hash}&apikey=${key}`,
-    { provider: 'etherscan:proxy', timeoutMs: 15000, retries: 1 },
-  );
-  return r.result?.from?.toLowerCase() ?? '';
+// POST на первый доступный RPC цепи: ошибка текущего эндпоинта → следующий.
+async function rpcCall<T>(chain: string, method: string, params: unknown[], provider: string): Promise<T> {
+  let lastErr: unknown = null;
+  for (const url of RPC_URLS[chain] ?? []) {
+    try {
+      const res = await fetchJson<{ result?: T; error?: unknown }>(url, {
+        provider, timeoutMs: 20000, retries: 1,
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      });
+      return res.result as T;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr ?? new Error(`no rpc endpoint for ${chain}`);
 }
 
-async function latestBlock(key: string, chainId: number): Promise<number> {
-  const r = await fetchJson<{ result: string }>(
-    `${ES}?chainid=${chainId}&module=proxy&action=eth_blockNumber&apikey=${key}`,
-    { provider: 'etherscan:proxy', timeoutMs: 15000, retries: 1 },
+// Безключевой путь: eth_getLogs + eth_getBlockByNumber для таймстампов
+// (JSON-RPC eth_getLogs, в отличие от Etherscan API, поле timeStamp не отдаёт).
+async function rpcLogs(chain: string, address: string, from: number, to: number, tsBudget: { left: number }): Promise<LogRow[]> {
+  const raw = await rpcCall<{ address: string; topics: string[]; blockNumber: string; transactionHash: string; data: string }[]>(
+    chain, 'eth_getLogs', [{ address, fromBlock: hex(from), toBlock: hex(to) }], `rpc:logs:${chain}`,
   );
-  return parseInt(r.result, 16);
+  const tsCache = new Map<number, number>();
+  const out: LogRow[] = [];
+  for (const l of raw ?? []) {
+    const blk = parseInt(l.blockNumber, 16);
+    let ts = tsCache.get(blk);
+    if (ts === undefined) {
+      if (tsBudget.left <= 0) { out.push({ ...l, timeStamp: '0' }); continue; }
+      tsBudget.left--;
+      const b = await rpcCall<{ timestamp?: string }>(chain, 'eth_getBlockByNumber', [hex(blk), false], `rpc:block:${chain}`).catch(() => null);
+      ts = b?.timestamp ? parseInt(b.timestamp, 16) : 0;
+      tsCache.set(blk, ts);
+    }
+    out.push({ ...l, timeStamp: hex(ts || 0) });
+  }
+  return out;
+}
+
+async function latestBlockOf(chain: string, key: string, chainId: number): Promise<number> {
+  if (key) {
+    const r = await fetchJson<{ result: string }>(
+      `${ES}?chainid=${chainId}&module=proxy&action=eth_blockNumber&apikey=${key}`,
+      { provider: 'etherscan:proxy', timeoutMs: 15000, retries: 1 },
+    );
+    return parseInt(r.result, 16);
+  }
+  return parseInt(await rpcCall<string>(chain, 'eth_blockNumber', [], `rpc:latest:${chain}`), 16);
+}
+
+async function txSenderOf(chain: string, key: string, chainId: number, hash: string): Promise<string> {
+  if (key) {
+    const r = await fetchJson<{ result: { from: string } | null }>(
+      `${ES}?chainid=${chainId}&module=proxy&action=eth_getTransactionByHash&txhash=${hash}&apikey=${key}`,
+      { provider: 'etherscan:proxy', timeoutMs: 15000, retries: 1 },
+    );
+    return r.result?.from?.toLowerCase() ?? '';
+  }
+  const t = await rpcCall<{ from?: string } | null>(chain, 'eth_getTransactionByHash', [hash], `rpc:tx:${chain}`).catch(() => null);
+  return t?.from?.toLowerCase() ?? '';
 }
 
 // Возвращает короткий статус для журнала; null — тихий успешный проход.
 export async function collectMixerIndex(ctx: AppCtx): Promise<string | null> {
   const key = ctx.cfg.etherscanKey;
-  if (!key) return 'ERROR: ETHERSCAN_KEY не настроен — индекс миксеров не собирается';
-
   const chains = [...new Set(TORNADO_INSTANCES.map((i) => i.chain))];
   const rr = parseInt((await ctx.kv.get('mixidx:rr')) ?? '0', 10) || 0;
   await ctx.kv.put('mixidx:rr', String(rr + 1));
@@ -89,8 +148,9 @@ export async function collectMixerIndex(ctx: AppCtx): Promise<string | null> {
     await ctx.kv.put(`mixidx:reg:${chain}`, '1');
   }
 
-  const latest = await latestBlock(key, chainId);
+  const latest = await latestBlockOf(chain, key, chainId);
   let dCount = 0, wCount = 0, depBudget = DEP_CAP;
+  const tsBudget = { left: TS_CAP };
 
   for (const inst of insts) {
     const ckKey = `mixidx:${chainId}:${inst.addr}`;
@@ -100,7 +160,9 @@ export async function collectMixerIndex(ctx: AppCtx): Promise<string | null> {
     }
     if (from >= latest) continue; // ничего нового
     const to = Math.min(latest, from + CHUNK);
-    const logs = await getLogs(key, chainId, inst.addr, from, to).catch(() => [] as LogRow[]);
+    const logs = key
+      ? await esLogs(key, chainId, inst.addr, from, to).catch(() => [] as LogRow[])
+      : await rpcLogs(chain, inst.addr, from, to, tsBudget).catch(() => [] as LogRow[]);
     const rows: { chain: string; contract: string; commitment: string; amount: number; ts: number; addr?: string }[] = [];
     const depHashes: string[] = [];
     let lastBlock = from;
@@ -125,12 +187,14 @@ export async function collectMixerIndex(ctx: AppCtx): Promise<string | null> {
     for (const h of depHashes) {
       if (depBudget <= 0) break;
       depBudget--;
-      await sleep(220); // free-ключ: ~5 вызовов/сек
-      const from_ = await txFrom(key, chainId, h).catch(() => '');
+      await sleep(220); // публичные API: пауза между личными вызовами
+      const from_ = await txSenderOf(chain, key, chainId, h).catch(() => '');
       if (!from_) continue;
       const log = logs.find((l) => l.transactionHash === h && l.topics?.[0] === TOPIC_DEPOSIT);
       if (!log) continue;
-      rows.push({ chain, contract: inst.addr, commitment: 'd:' + h, amount: inst.nominal, ts: parseInt(log.timeStamp, 16), addr: normAddr(chain, from_) });
+      const ts = parseInt(log.timeStamp, 16);
+      if (!ts) continue; // таймстамп блока не получен — повторим в следующий проход
+      rows.push({ chain, contract: inst.addr, commitment: 'd:' + h, amount: inst.nominal, ts, addr: normAddr(chain, from_) });
       dCount++;
       processed++;
     }
@@ -144,6 +208,6 @@ export async function collectMixerIndex(ctx: AppCtx): Promise<string | null> {
     if (depBudget <= 0) break;
   }
 
-  if (dCount || wCount) return `${chain}: +${dCount} депозитов, +${wCount} выводов в индекс миксеров`;
+  if (dCount || wCount) return `${chain}: +${dCount} депозитов, +${wCount} выводов в индекс миксеров (${key ? 'etherscan' : 'public rpc'})`;
   return null;
 }
