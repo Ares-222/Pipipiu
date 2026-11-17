@@ -4,6 +4,7 @@ import { haptic, onBackButton, webApp } from './tg';
 import Home from './screens/Home';
 import Report from './screens/Report';
 import Graph from './screens/Graph';
+import TraceLoading from './screens/TraceLoading';
 import Monitor from './screens/Monitor';
 import History from './screens/History';
 import Settings from './screens/Settings';
@@ -26,6 +27,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [traceLoading, setTraceLoading] = useState(false);
+  const cancelTraceRef = useRef(false);
   const lastSearchRef = useRef<string>('');
 
   const notify = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2500); };
@@ -55,23 +58,43 @@ export default function App() {
     return r.report;
   }
 
+  // Запуск расследования: показываем честный экран этапов (TraceLoading) вместо
+  // серого «загружаю…» сверху страницы. API не отдаёт промежуточный прогресс —
+  // экран идёт по таймеру; отмена не разрывает fetch, но результат игнорируется
+  // и переключения экрана не происходит.
   async function openGraph() {
     if (!report?.chains[0]) return;
-    setLoading(true); setError('');
+    haptic();
+    const cr = report.chains[0];
+    cancelTraceRef.current = false;
+    setTrace(null);
+    setError('');
+    setTraceLoading(true);
     try {
-      const cr = report.chains[0];
       const r = await api<{ trace: TraceResult }>(`/graph?addr=${encodeURIComponent(cr.account.addr)}&chain=${cr.chain}&depth=2`);
+      if (cancelTraceRef.current) return;
       setTrace(r.trace);
       setScreen('graph');
-    } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
+    } catch (e) {
+      // Ошибка трассировки не видна на экране отчёта через state error — показываем тост.
+      if (!cancelTraceRef.current) notify('⚠️ Расследование не удалось: ' + (e as Error).message);
+    } finally { setTraceLoading(false); }
+  }
+
+  function cancelTrace() {
+    cancelTraceRef.current = true;
+    setTraceLoading(false);
   }
 
   // BackButton navigates home from deep screens
   useEffect(() => {
-    const back = () => { setScreen('home'); };
+    const back = () => {
+      if (traceLoading) { cancelTrace(); return; } // Back во время расследования = отмена
+      setScreen('home');
+    };
     if (screen !== 'home') { onBackButton(back); return () => onBackButton(null); }
     onBackButton(null);
-  }, [screen]);
+  }, [screen, traceLoading]);
 
   // Deep link: на первом монтировании И на каждой реактивации webview.
   // Фикс бага 22:46: форки Telegram (AyuGram) восстанавливают webview из bfcache
@@ -104,26 +127,36 @@ export default function App() {
 
   return (
     <div style={{ paddingBottom: 70, minHeight: '100vh', background: 'var(--bg)' }}>
-      {screen === 'home' && <Home onSearch={doSearch} loading={loading} error={error} onOpenReport={() => setScreen('report')} lastReport={report} />}
-      {screen === 'report' && report && (
-        <Report
-          report={report}
-          onGraph={openGraph}
-          notify={notify}
-          onOpenAddr={(addr) => void doSearch(addr)}
-          onRefresh={refreshReport}
+      {traceLoading && report?.chains[0] ? (
+        <TraceLoading
+          addr={report.chains[0].account.addr}
+          chain={report.chains[0].chain}
+          onCancel={cancelTrace}
         />
+      ) : (
+        <>
+          {screen === 'home' && <Home onSearch={doSearch} loading={loading} error={error} onOpenReport={() => setScreen('report')} lastReport={report} />}
+          {screen === 'report' && report && (
+            <Report
+              report={report}
+              onGraph={openGraph}
+              notify={notify}
+              onOpenAddr={(addr) => void doSearch(addr)}
+              onRefresh={refreshReport}
+            />
+          )}
+          {screen === 'graph' && (trace || report) && (
+            <Graph
+              report={report}
+              trace={trace}
+              onOpenAddr={(addr) => void doSearch(addr)}
+            />
+          )}
+          {screen === 'monitor' && <Monitor onOpenAddr={doSearch} />}
+          {screen === 'history' && <History onOpenAddr={doSearch} />}
+          {screen === 'settings' && <Settings notify={notify} />}
+        </>
       )}
-      {screen === 'graph' && (trace || report) && (
-        <Graph
-          report={report}
-          trace={trace}
-          onOpenAddr={(addr) => void doSearch(addr)}
-        />
-      )}
-      {screen === 'monitor' && <Monitor onOpenAddr={doSearch} />}
-      {screen === 'history' && <History onOpenAddr={doSearch} />}
-      {screen === 'settings' && <Settings notify={notify} />}
 
       {toast && <div className="fade-in" style={{ position: 'fixed', top: 12, left: 16, right: 16, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 12, padding: '10px 14px', zIndex: 90, fontSize: 13 }}>{toast}</div>}
 

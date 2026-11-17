@@ -52,7 +52,17 @@ export interface WalletReport {
 }
 export interface GraphNode { id: string; chain: string; addr: string; label?: string; category?: string; volume: number; in: number; out: number; txCount: number; isRoot?: boolean; role?: string; probable?: boolean; }
 export interface GraphEdge { from: string; to: string; amount: number; asset: string; txCount: number; firstTs: number; lastTs: number; probable?: boolean; p?: number; via?: string; }
-export interface TraceResult { root: string; chain: string; depth: number; nodes: GraphNode[]; edges: GraphEdge[]; leaks: { addr: string; label?: string; category?: string; probable?: boolean; amount: number; asset: string; share: number }[]; findings: string[]; unmix?: unknown[]; truncated?: boolean; fetchesUsed: number; }
+export interface TraceResultLeak { addr: string; label?: string; category?: string; probable?: boolean; amount: number; asset: string; share: number; }
+// Зеркало UnmixFinding из worker/src/core/types.ts (spec §11.4): статистический
+// матчинг депозит→вывод через миксер, вероятность = 1/n совпадающих выводов в окне.
+export interface UnmixFinding {
+  mixer: string; mixerLabel?: string;
+  deposits: { addr: string; amount: number; ts: number }[];
+  outputs: { addr: string; amount: number; ts: number }[];
+  links: { from: string; to: string; amount: number; p: number }[];
+  note: string;
+}
+export interface TraceResult { root: string; chain: string; depth: number; nodes: GraphNode[]; edges: GraphEdge[]; leaks: TraceResultLeak[]; findings: string[]; unmix?: UnmixFinding[]; truncated?: boolean; fetchesUsed: number; }
 
 export const CATEGORY_RU: Record<string, string> = {
   cex: 'Биржа', payment: 'Платёжный сервис', mixer: 'Миксер', bridge: 'Мост',
