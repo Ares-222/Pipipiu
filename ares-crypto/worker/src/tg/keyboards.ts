@@ -30,6 +30,10 @@ export function reportKb(opts: {
   ]);
   const photoUrl = miniAppUrl(opts.miniappUrl, opts.addr);
   if (photoUrl) rows.push([{ text: '📸 Фотокарточка', web_app: { url: photoUrl } }]);
+  // AML-досье (17.11): профессиональный PDF документом в чат. Webapp открывается
+  // с startapp=AML:<addr> — мини-апп сам собирает отчёт и присылает документ.
+  const amlUrl = miniAppUrl(opts.miniappUrl, `AML:${opts.addr}`);
+  if (amlUrl) rows.push([{ text: '🛡 AML-отчёт (PDF в чат)', web_app: { url: amlUrl } }]);
   rows.push([
     { text: opts.watching ? '⏸ Пауза мониторинга' : '🔔 Мониторинг', callback_data: opts.watching ? `pause:${opts.chain}:${opts.addr}` : `watch:${opts.chain}:${opts.addr}` },
   ]);

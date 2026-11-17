@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react';
-import { api, fmt, fmtUsd, fmtPct, short, levelRu, levelColor, categoryRu, categoryIcon, type WalletReport, type ChainReport, type Finding } from '../api';
+import { api, fmt, fmtUsd, fmtPct, short, levelRu, levelColor, categoryRu, categoryIcon, type WalletReport, type ChainReport, type Finding, type TraceResult } from '../api';
 import { haptic } from '../tg';
 import { renderCardJpeg } from '../card/card';
 import { makePdf } from '../pdf/makePdf';
+import { makeAmlPdf } from '../pdf/makeAmlPdf';
 
-export default function Report({ report, onGraph, notify, onOpenAddr, onRefresh }: {
+export default function Report({ report, trace, onGraph, notify, onOpenAddr, onRefresh }: {
   report: WalletReport;
+  trace?: TraceResult | null;
   onGraph: () => void;
   notify: (m: string) => void;
   onOpenAddr: (addr: string) => void;
@@ -52,7 +54,11 @@ export default function Report({ report, onGraph, notify, onOpenAddr, onRefresh 
     try {
       const rep = await freshReport();
       const a = rep.chains[0]?.account.addr ?? rep.input;
-      const b64 = await makePdf(rep);
+      // Результат расследования попадает в PDF только если он для ЭТОГО адреса
+      // и адрес совпадает со свежим отчётом (гвард устаревших данных).
+      const freshAddr = rep.chains[0]?.account.addr ?? rep.input;
+      const t = trace && trace.root === freshAddr ? trace : null;
+      const b64 = await makePdf(rep, t);
       await api('/pdf', { method: 'POST', body: JSON.stringify({ pdf: b64, filename: `ares-${short(a, 6, 4)}.pdf`, caption: 'Полный отчёт PDF' }) });
       notify('📄 PDF отправлен в чат');
     } catch (e) { notify('⚠️ ' + (e as Error).message); } finally { setBusy(''); }
@@ -63,6 +69,21 @@ export default function Report({ report, onGraph, notify, onOpenAddr, onRefresh 
     try {
       await api('/watch', { method: 'POST', body: JSON.stringify({ addr, chain: cr.chain }) });
       notify('🔔 Мониторинг включён (проверка каждые 5 минут)');
+    } catch (e) { notify('⚠️ ' + (e as Error).message); } finally { setBusy(''); }
+  }
+
+  // Отдельное профессиональное AML/KYT-досье документом в чат (17.11, заказчик).
+  async function amlPdf() {
+    haptic(); setBusy('amlpdf');
+    try {
+      const rep = await freshReport();
+      const a = rep.chains[0]?.account.addr ?? rep.input;
+      const b64 = await makeAmlPdf(rep);
+      await api('/pdf', {
+        method: 'POST',
+        body: JSON.stringify({ pdf: b64, filename: `aml-${short(a, 6, 4)}.pdf`, caption: '🛡 AML/KYT-досье · профессиональный скоринг по публичным источникам' }),
+      });
+      notify('🛡 AML-досье отправлено в чат');
     } catch (e) { notify('⚠️ ' + (e as Error).message); } finally { setBusy(''); }
   }
 
@@ -280,6 +301,7 @@ export default function Report({ report, onGraph, notify, onOpenAddr, onRefresh 
         <button className="btn" onClick={photoCard} disabled={busy === 'photo'}>{busy === 'photo' ? '…' : '📸 Фотокарточка'}</button>
         <button className="btn" onClick={watch} disabled={busy === 'watch'}>{busy === 'watch' ? '…' : '🔔 Следить'}</button>
         <button className="btn" onClick={pdf} disabled={busy === 'pdf'}>{busy === 'pdf' ? '…' : '📄 PDF'}</button>
+        <button className="btn" style={{ gridColumn: '1 / -1' }} onClick={amlPdf} disabled={busy === 'amlpdf'}>{busy === 'amlpdf' ? '⏳ Собираю досье…' : '🛡 AML-отчёт (PDF в чат)'}</button>
         <button className="btn btn-ghost" style={{ gridColumn: '1 / -1' }} onClick={exportJson}>⬇ Экспорт JSON</button>
       </div>
 

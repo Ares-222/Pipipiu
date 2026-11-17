@@ -140,7 +140,14 @@ function kindOf(category?: string): string {
 
 export function renderAml(aml: AmlResult): string {
   const lines: string[] = [];
-  lines.push(`🛡 <b>AML: ${aml.score}/100 — ${LEVEL_RU[aml.level] ?? '?'}</b>`);
+  // Шкала риска: 10 блоков, 1 блок = 10 пунктов (17.11: «усилить», как в платных ботах).
+  const filled = Math.max(1, Math.min(10, Math.round(aml.score / 10)));
+  const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
+  lines.push(`🛡 <b>AML-СКОРИНГ</b>`);
+  lines.push(`<code>${bar}</code> <b>${aml.score}/100 — ${LEVEL_RU[aml.level] ?? '?'}</b>`);
+
+  const frozen = aml.hits.some((h) => h.source.includes('freeze'));
+  if (frozen) lines.push(`🧊 <b>freeze-статус обнаружен</b>: адрес или контрагент заблокирован эмитентом стейблкоина — переводы могут быть заморожены.`);
 
   // Происхождение средств (exposure по меткам контрагентов)
   if (aml.exposure?.length) {
@@ -166,6 +173,17 @@ export function renderAml(aml: AmlResult): string {
   if (aml.exchangeExit.length) {
     lines.push(`· Точка KYC-деанонимизации: ${aml.exchangeExit.slice(0, 3).map((e) => esc(e.label)).join(', ')}`);
   }
+
+  // Рекомендация по уровню (короткая, как в платных AML-ботах)
+  const rec = aml.level === 'critical'
+    ? '🔴 НЕ отправляй: связь со санкционной/скам-инфраструктурой или freeze-листом. Зафиксируй доказательства и не переводи дальше полученное.'
+    : aml.level === 'high'
+      ? '🟠 Воздержись от перевода до подтверждения происхождения средств; запроси KYC контрагента.'
+      : aml.level === 'medium'
+        ? '🟡 При суммах выше ~$1 000 запроси источник средств; тестовый перевод и частичная оплата.'
+        : '✅ Ограничений не требуется: тестовый перевод и повторная проверка перед крупной суммой.';
+  lines.push(rec);
+  lines.push(`📄 Полное AML/KYT-досье PDF: кнопка «🛡 AML-отчёт (PDF в чат)» под отчётом.`);
   lines.push(`<i>${esc(aml.disclaimer)}</i>`);
   return lines.join('\n');
 }

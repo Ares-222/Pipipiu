@@ -28,19 +28,31 @@ function colorOf(n: GraphNode): string {
   return n.probable ? `${base}99` : base;
 }
 
-function nodeLabel(n: GraphNode): string {
+// Компактные суммы для второй строки подписи узла: 12500 → «12,5k», 3_400_000 → «3,4M».
+function kf(n: number): string {
+  const a = Math.abs(n);
+  if (a >= 1e6) return `${(n / 1e6).toFixed(a >= 1e7 ? 0 : 1).replace('.', ',')}M`;
+  if (a >= 1e3) return `${(n / 1e3).toFixed(a >= 1e4 ? 0 : 1).replace('.', ',')}k`;
+  return fmt(n, 0);
+}
+
+// Подпись узла. Вторая строка (вх/вых) — только у прямых контактов ЦЕЛИ и у хабов:
+// пользователь должен видеть ЦИФРЫ прямо на графе, не догадываясь, что за адрес.
+function nodeLabel(n: GraphNode, direct: boolean, hub: boolean): string {
   if (n.isRoot) return '🎯 ЦЕЛЬ';
   const icon = categoryIcon(n.category);
-  if (n.label) {
-    const name = n.label.length > 18 ? `${n.label.slice(0, 17)}…` : n.label;
-    return `${icon} ${name}${n.probable && !n.label.endsWith('?') ? ' ?' : ''}`;
-  }
-  return `${icon} ${short(n.addr, 8, 4)}${n.probable ? ' ?' : ''}`;
+  const name = n.label
+    ? (n.label.length > 18 ? `${n.label.slice(0, 17)}…` : n.label)
+    : short(n.addr, 8, 4);
+  const q = n.probable && !n.label?.endsWith('?') ? ' ?' : '';
+  const line1 = `${hub && !direct ? '◉ ' : ''}${icon} ${name}${q}`;
+  if (direct || hub) return `${line1}\nвх ${kf(n.in)} · вых ${kf(n.out)}`;
+  return line1;
 }
 
 function chipLabel(cat: string, allProbable: boolean): string {
   if (cat === 'service' && allProbable) return 'Биржа/сервис?';
-  if (cat === 'personal') return 'Личный/неопознанный';
+  if (cat === 'personal') return 'Без метки · просто адрес';
   return categoryRu(cat);
 }
 
@@ -126,18 +138,39 @@ export default function Graph({ report, trace, onOpenAddr }: {
     [edges],
   );
 
+  // Прямой 1-й круг: узлы, соединённые с ЦЕЛЬЮ ребром напрямую (между ними были
+  // переводы). Всё остальное — дальние связи 2-го круга (посредники). Это главный
+  // ответ на вопрос «что за адреса вне потоков».
+  const rootId = nodes.find((n) => n.isRoot)?.id;
+  const hop1Ids = useMemo(() => {
+    if (!rootId) return new Set<string>();
+    const s = new Set<string>();
+    for (const e of edges) {
+      if (e.from === rootId && e.to !== rootId) s.add(e.to);
+      if (e.to === rootId && e.from !== rootId) s.add(e.from);
+    }
+    return s;
+  }, [nodes, edges, rootId]);
+
+  // Хабы: топ-3 узла по обороту (кроме ЦЕЛИ) — крупные транзитные точки, через
+  // которые шли деньги. ◉ в подписи + вторая строка с суммами.
+  const hubIds = useMemo(
+    () => new Set(nodes.filter((n) => !n.isRoot).sort((a, b) => b.volume - a.volume).slice(0, 3).map((n) => n.id)),
+    [nodes],
+  );
+
   useEffect(() => {
     if (!wrapRef.current || nodes.length === 0) return;
-    const rootId = nodes.find((n) => n.isRoot)?.id;
     const els = [
       ...nodes.map((n) => ({
         data: {
           id: n.id,
-          label: nodeLabel(n),
+          label: nodeLabel(n, hop1Ids.has(n.id), hubIds.has(n.id)),
           color: n.isRoot ? '#FF2800' : colorOf(n), // цель — красное ядро, как на радаре запуска
           size: Math.max(18, Math.min(52, 14 + Math.sqrt(Math.max(1, n.volume)) * 0.16)),
           marked: (!!n.category && n.category !== 'personal') || !!n.probable,
         },
+        classes: hop1Ids.has(n.id) ? (hubIds.has(n.id) ? 'hop1 hub' : 'hop1') : (hubIds.has(n.id) ? 'far hub' : 'far'),
       })),
       ...edges.map((e, i) => ({
         data: {
@@ -149,6 +182,7 @@ export default function Graph({ report, trace, onOpenAddr }: {
           top: topEdgeIdx.has(i),
           width: Math.min(7, 1.6 + Math.log10(Math.max(1, e.amount)) / 1.35),
         },
+        classes: rootId && (e.from === rootId || e.to === rootId) ? 'direct' : '',
       })),
     ];
     const cy = cytoscape({
@@ -172,6 +206,21 @@ export default function Graph({ report, trace, onOpenAddr }: {
           'border-style': 'dashed',
           'border-color': '#F59E0B',
         } as cytoscape.Css.Node },
+        // Прямой контакт цели: сплошная яркая рамка В ЦВЕТ узла — «между ними были переводы».
+        { selector: 'node.hop1', style: {
+          'border-width': 3,
+          'border-style': 'solid',
+          'border-color': 'data(color)',
+          opacity: 1,
+        } as cytoscape.Css.Node },
+        // Дальняя связь: полупрозрачная, тонкая серая рамка — «второстепенный адрес».
+        { selector: 'node.far', style: {
+          'border-width': 1,
+          'border-style': 'solid',
+          'border-color': '#3A3A44',
+          opacity: 0.62,
+        } as cytoscape.Css.Node },
+        { selector: 'node.hub', style: { 'font-size': 11.5 } },
         { selector: 'node.is-root', style: {
           'border-width': 3.5,
           'border-style': 'solid',
@@ -200,9 +249,27 @@ export default function Graph({ report, trace, onOpenAddr }: {
           'text-rotation': 'autorotate',
           'line-style': (el) => (el.data('probable') ? 'dashed' : 'solid'),
         } as cytoscape.Css.Edge },
+        // Рёбра из/в ЦЕЛЬ: чуть светлее остальных серых — «переводы самого кошелька».
+        { selector: 'edge.direct', style: {
+          'line-color': (el) => (el.data('top') ? '#F59E0B' : '#71717F'),
+          'target-arrow-color': (el) => (el.data('top') ? '#F59E0B' : '#71717F'),
+        } as cytoscape.Css.Edge },
       ],
-      layout: { name: 'cose', animate: true, animationDuration: 400, padding: 40 } as cytoscape.LayoutOptions,
+      // Концентрическая раскладка (17.11): граф = радар. ЦЕЛЬ — красное ядро в
+      // центре, прямые контакты — первое кольцо, дальние связи — внешний круг.
+      // Это буквально отвечает на вопрос «что за адреса вне потоков» и совпадает
+      // с дизайном радара запуска. Cose давал широкую раскладку, не заполнявшую
+      // вертикаль полотна.
+      layout: {
+        name: 'concentric', animate: true, animationDuration: 450, padding: 40,
+        concentric: (n: cytoscape.NodeSingular) => (n.data('id') === rootId ? 100 : hop1Ids.has(n.data('id')) ? 70 : 40),
+        levelWidth: () => 1.2,
+        minNodeSpacing: 44,
+        spacingFactor: 1.55,
+      } as cytoscape.LayoutOptions,
     });
+    // После раскладки вписываем граф в полотно целиком.
+    cy.on('layoutstop', () => cy.fit(undefined, 40));
     cy.nodes().forEach((n) => {
       if (n.data('id') === nodes[0]?.id) n.addClass('is-root');
     });
@@ -261,7 +328,7 @@ export default function Graph({ report, trace, onOpenAddr }: {
       </div>
 
       {legend.length > 0 && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
           {legend.map((l) => (
             <span key={l.cat} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, background: '#17171C', border: '1px solid var(--border)', borderRadius: 999, padding: '4px 9px' }}>
               <span style={{ width: 9, height: 9, borderRadius: '50%', background: CAT_COLORS[l.cat] ?? '#9CA3AF', flexShrink: 0 }} />
@@ -272,14 +339,33 @@ export default function Graph({ report, trace, onOpenAddr }: {
         </div>
       )}
 
+      {/* Визуальный язык графа — всегда на виду: размер, толщина, рамки, стрелки */}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+        <span className="glyph-chip">⭕ размер круга = оборот адреса</span>
+        <span className="glyph-chip">➜ толщина стрелки = сумма перевода</span>
+        <span className="glyph-chip glyph-amber">янтарные стрелки — крупнейшие потоки</span>
+        <span className="glyph-chip">
+          <span style={{ width: 9, height: 9, borderRadius: '50%', border: '2px solid #55D6BE', flexShrink: 0 }} />
+          яркая рамка — прямой контакт ({hop1Ids.size})
+        </span>
+        <span className="glyph-chip">
+          <span style={{ width: 9, height: 9, borderRadius: '50%', border: '1px solid #3A3A44', opacity: 0.6, flexShrink: 0 }} />
+          тусклые — дальние связи ({nodes.length - 1 - hop1Ids.size})
+        </span>
+      </div>
+
+      {/* Шпаргалка одним взглядом — всегда раскрыта (details оставлен для деталей) */}
+      <div className="graph-hint" style={{ marginBottom: 8 }}>
+        <b>Граф — это радар:</b> в красном ядре — проверяемый кошелёк (ЦЕЛЬ); <b>первое кольцо</b> — прямые контакты ({hop1Ids.size}), с ними были переводы напрямую; <b>внешний круг</b> — дальние связи ({Math.max(0, nodes.length - 1 - hop1Ids.size)}) через посредников. Подпись — публичная метка или адрес; у первого кольца и хабов есть вторая строка: сколько вошло/вышло. <span style={{ color: 'var(--warn)' }}>Пунктирная янтарная рамка</span> = тип угадан по потокам (с «?»). Тапни круг — карточка с деталями.
+      </div>
+
       <details className="guide" style={{ marginBottom: 8 }}>
-        <summary>❓ Как читать граф</summary>
+        <summary>❓ Подробнее: цвета, стрелки, точность</summary>
         <div style={{ marginTop: 6, lineHeight: 1.55 }}>
-          Стрелка = направление перевода, толщина = объём, янтарный цвет = крупнейший поток.
-          Белый узел с красной рамкой и свечением — проверяемый кошелёк (ЦЕЛЬ).
-          Цвет узла = тип: 🏦 биржа · 🔧 сервис/биржа? · 💳 платёжный · 🌉 мост · 🌀 миксер · 🚨 скам · ⛔ санкционный · 🤖 Telegram-бот · 👤 личный/неопознанный.
+          Стрелка = направление перевода, толщина = объём, янтарный цвет = крупнейший поток; рёбра из ЦЕЛИ и в ЦЕЛЬ чуть светлее остальных — это переводы самого кошелька.
+          Красное ядро с свечением в центре — проверяемый кошелёк (ЦЕЛЬ). Первое кольцо вокруг ядра — прямые контакты (сплошная яркая рамка в цвет). Внешний круг — дальние связи (тусклые, полупрозрачные).
+          Цвет круга = тип: 🏦 биржа · 🔧 сервис/биржа? · 💳 платёжный · 🌉 мост · 🌀 миксер · 🚨 скам · ⛔ санкционный · 🤖 Telegram-бот · 👤 без метки.
           Полупрозрачный узел со «?» и пунктирной рамкой — предположение по структуре потоков, не метка провайдера.
-          Тап по узлу — детали и переход к его отчёту.
         </div>
       </details>
 
@@ -290,20 +376,30 @@ export default function Graph({ report, trace, onOpenAddr }: {
         <button className="btn" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => setMinEdge(10000)}>≥ 10k</button>
       </div>
       <div id="graph-wrap" ref={wrapRef} style={{
-        height: 460,
+        height: 560,
         background: 'radial-gradient(900px 420px at 50% 0%, #15151B 0%, #0F0F12 60%)',
         border: '1px solid var(--border)', borderRadius: 14, position: 'relative', overflow: 'hidden',
       }}>
         {selected && (
           <div className="side-sheet fade-in">
             <div className="microlabel">{selected.isRoot ? 'Целевой узел' : categoryRuFull(selected.category, selected.probable)}</div>
+            {selected.isRoot ? (
+              <div style={{ fontSize: 11.5, color: 'var(--danger)', marginTop: 2 }}>🎯 проверяемый кошелёк — центр графа</div>
+            ) : hop1Ids.has(selected.id) ? (
+              <div style={{ fontSize: 11.5, color: 'var(--ok)', marginTop: 2 }}>🔗 прямой контакт с ЦЕЛЬЮ: между ними были переводы напрямую</div>
+            ) : (
+              <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>○ дальняя связь: 2-й круг графа — связан с целью через посредников</div>
+            )}
             {selected.probable && !selected.isRoot && (
-              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>оценка по структуре потоков — не метка провайдера</div>
+              <div style={{ fontSize: 11, color: 'var(--warn)', marginTop: 2 }}>тип угадан по структуре потоков — не метка провайдера</div>
+            )}
+            {hubIds.has(selected.id) && !selected.isRoot && (
+              <div style={{ fontSize: 11, color: 'var(--warn)', marginTop: 2 }}>◉ хаб: один из крупнейших по обороту в этой выборке</div>
             )}
             <div className="mono" style={{ fontSize: 11, margin: '4px 0', wordBreak: 'break-all' }}>{selected.addr}</div>
             {selected.label && <div style={{ fontSize: 12, color: 'var(--warn)' }}>🏷 {selected.label}</div>}
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
-              объём {fmt(selected.volume)} · вход {fmt(selected.in)} · выход {fmt(selected.out)} · {selected.txCount} tx
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+              Оборот: <b style={{ color: 'var(--text)' }}>{fmt(selected.volume)}</b> · вход {fmt(selected.in)} · выход {fmt(selected.out)} · {selected.txCount} tx
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <button className="btn btn-red" style={{ fontSize: 12, padding: '8px 12px' }} onClick={() => onOpenAddr(selected.addr)}>Открыть отчёт по нему</button>

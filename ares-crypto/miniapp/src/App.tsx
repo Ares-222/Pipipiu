@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type WalletReport, type TraceResult, fmt } from './api';
+import { api, type WalletReport, type TraceResult, fmt, short } from './api';
 import { haptic, onBackButton, webApp } from './tg';
+import { makeAmlPdf } from './pdf/makeAmlPdf';
 import Home from './screens/Home';
 import Report from './screens/Report';
 import Graph from './screens/Graph';
@@ -9,10 +10,11 @@ import Monitor from './screens/Monitor';
 import History from './screens/History';
 import Settings from './screens/Settings';
 
-type Screen = 'home' | 'report' | 'graph' | 'monitor' | 'history' | 'settings';
+type Screen = 'home' | 'report' | 'graph' | 'monitor' | 'history' | 'settings' | 'aml';
 
 // Deep link из кнопок бота. Telegram кладёт startapp в initDataUnsafe.start_param
 // только для прямых ссылок; у inline web_app-кнопок параметр остаётся в URL страницы.
+// Префикс AML: — запуск авто-AML-досье (кнопка «🛡 AML-отчёт (PDF)» в боте).
 function deepLinkAddr(): string {
   const sp = webApp()?.initDataUnsafe?.start_param;
   if (sp) return sp.trim();
@@ -86,6 +88,36 @@ export default function App() {
     setTraceLoading(false);
   }
 
+  // ---------- AML-досье: авто-поток из кнопки бота ----------
+  // Кнопка «🛡 AML-отчёт (PDF)» открывает webapp с ?startapp=AML:<addr>: мини-апп
+  // сам собирает отчёт, строит профессиональное AML/KYT-досье и отправляет его
+  // документом в чат через /api/pdf. Пользователь видит этапы и результат.
+  const lastAmlRef = useRef<string>('');
+  const [amlStatus, setAmlStatus] = useState<{ state: 'work' | 'done' | 'err'; step: string; msg: string; addr: string }>({ state: 'work', step: '', msg: '', addr: '' });
+
+  async function amlFlow(rawAddr: string, silentRerun = false): Promise<void> {
+    const addr = rawAddr.trim();
+    haptic();
+    setScreen('aml');
+    setAmlStatus({ state: 'work', step: 'Собираю транзакции и профиль кошелька…', msg: '', addr });
+    if (!silentRerun) setReport(null);
+    try {
+      const r = await api<{ report: WalletReport }>(`/report?addr=${encodeURIComponent(addr)}`);
+      setReport(r.report);
+      setTrace(null);
+      setAmlStatus(s => ({ ...s, step: 'Скоринг AML готов, формирую досье…' }));
+      const b64 = await makeAmlPdf(r.report);
+      setAmlStatus(s => ({ ...s, step: 'Отправляю документ в чат…' }));
+      await api('/pdf', {
+        method: 'POST',
+        body: JSON.stringify({ pdf: b64, filename: `aml-${short(r.report.chains[0]?.account.addr ?? addr, 6, 4)}.pdf`, caption: '🛡 AML/KYT-досье · профессиональный скоринг по публичным источникам' }),
+      });
+      setAmlStatus({ state: 'done', step: '', msg: 'AML-досье отправлено в чат документом PDF.', addr });
+    } catch (e) {
+      setAmlStatus({ state: 'err', step: '', msg: (e as Error).message, addr });
+    }
+  }
+
   // BackButton navigates home from deep screens
   useEffect(() => {
     const back = () => {
@@ -105,6 +137,12 @@ export default function App() {
   useEffect(() => {
     const rerun = () => {
       const sp = deepLinkAddr();
+      // AML-поток: кнопка «🛡 AML-отчёт (PDF)» в боте ведёт сюда с ?startapp=AML:<addr>
+      if (sp.startsWith('AML:')) {
+        const addr = sp.slice(4);
+        if (addr && addr !== lastAmlRef.current) { lastAmlRef.current = addr; void amlFlow(addr); }
+        return;
+      }
       if (sp && sp !== lastSearchRef.current) void doSearch(sp);
     };
     rerun();
@@ -139,6 +177,7 @@ export default function App() {
           {screen === 'report' && report && (
             <Report
               report={report}
+              trace={trace}
               onGraph={openGraph}
               notify={notify}
               onOpenAddr={(addr) => void doSearch(addr)}
@@ -151,6 +190,48 @@ export default function App() {
               trace={trace}
               onOpenAddr={(addr) => void doSearch(addr)}
             />
+          )}
+          {screen === 'aml' && (
+            <div className="fade-in" style={{ padding: 14 }}>
+              <div className="microlabel" style={{ marginBottom: 8, fontSize: 11 }}>AML / KYT досье · профессиональный скоринг</div>
+              <div className="card" style={{ padding: 16 }}>
+                {amlStatus.state === 'work' && (
+                  <>
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--info)', wordBreak: 'break-all', marginBottom: 10 }}>{amlStatus.addr}</div>
+                    <div className="spinner" style={{ margin: '0 auto 12px' }} />
+                    <div style={{ fontSize: 13, textAlign: 'center' }}>{amlStatus.step}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)', textAlign: 'center', marginTop: 6, lineHeight: 1.5 }}>
+                      Собираю источники, считаю скоринг и exposure, верстаю PDF — обычно 10–30 секунд. Готовый документ придёт в этот чат.
+                    </div>
+                  </>
+                )}
+                {amlStatus.state === 'done' && (
+                  <>
+                    <div style={{ fontSize: 30, textAlign: 'center', marginBottom: 8 }}>✅</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, textAlign: 'center' }}>Досье отправлено в чат</div>
+                    <div className="mono" style={{ fontSize: 11, color: 'var(--muted)', wordBreak: 'break-all', textAlign: 'center', margin: '8px 0' }}>{amlStatus.addr}</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--muted)', textAlign: 'center', lineHeight: 1.5 }}>
+                      Внутри: оценка риска 0–100 со шкалой, резюме для решения, происхождение средств (exposure), источники загрязнения с путями, куда уходят средства, методология и рекомендации.
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'center' }}>
+                      <button className="btn btn-red" style={{ fontSize: 12, padding: '8px 12px' }} onClick={() => setScreen('report')}>Обычный отчёт</button>
+                      <button className="btn" style={{ fontSize: 12, padding: '8px 12px' }} onClick={() => void amlFlow(amlStatus.addr, true)}>Отправить ещё раз</button>
+                    </div>
+                  </>
+                )}
+                {amlStatus.state === 'err' && (
+                  <>
+                    <div style={{ fontSize: 30, textAlign: 'center', marginBottom: 8 }}>⚠️</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, textAlign: 'center' }}>Не получилось</div>
+                    <div style={{ fontSize: 11.5, color: 'var(--danger)', textAlign: 'center', margin: '8px 0', wordBreak: 'break-word' }}>{amlStatus.msg}</div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'center' }}>
+                      <button className="btn" style={{ fontSize: 12, padding: '8px 12px' }} onClick={() => void amlFlow(amlStatus.addr, true)}>Повторить</button>
+                      <button className="btn" style={{ fontSize: 12, padding: '8px 12px' }} onClick={() => setScreen('home')}>На главную</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
           )}
           {screen === 'monitor' && <Monitor onOpenAddr={doSearch} />}
           {screen === 'history' && <History onOpenAddr={doSearch} />}

@@ -2,7 +2,7 @@
 // The PDF is assembled client-side, then POSTed to /api/pdf for Telegram delivery.
 
 import { jsPDF } from 'jspdf';
-import { fmt, fmtUsd, levelRu, categoryRu, short, type ChainReport, type Tx, type WalletReport } from '../api';
+import { fmt, fmtUsd, levelRu, categoryRu, categoryRuFull, short, type ChainReport, type Tx, type WalletReport, type TraceResult, type UnmixFinding } from '../api';
 import { renderCardJpeg } from '../card/card';
 import { renderDirectFlowGraph } from './flowGraph';
 
@@ -76,7 +76,7 @@ function recipientSummaries(cr: ChainReport): { addr: string; label: string; has
   return [...recipients.values()].sort((a, b) => b.hashes.size - a.hashes.size);
 }
 
-export async function makePdf(report: WalletReport): Promise<string> {
+export async function makePdf(report: WalletReport, trace?: TraceResult | null): Promise<string> {
   const doc = new jsPDF({ unit: 'pt', format: 'a4', compress: true });
   await loadFont(doc);
   doc.setProperties({
@@ -435,6 +435,108 @@ export async function makePdf(report: WalletReport): Promise<string> {
     textBlock('Для каждой записи сохранены направление, сумма, обе стороны, доступные подписи и transaction hash. Дубли событийных строк не следует автоматически трактовать как отдельные независимые транзакции.', 7.5, C.muted);
     cr.txs.forEach((tx, i) => addLedgerEntry(tx, i, cr));
   }
+
+  // ---------- РАССЛЕДОВАНИЕ (граф потоков, unmix, куда уходят деньги) ----------
+  // Раздел включается, когда в Mini App уже прогоняли расследование по этому адресу.
+  if (trace) {
+    addPage();
+    section('Расследование · граф потоков');
+    const tNodes = trace.nodes ?? [];
+    const tEdges = trace.edges ?? [];
+    const turnover = tEdges.reduce((s, e) => s + e.amount, 0);
+    textBlock(`Сеть: ${trace.chain.toUpperCase()} · глубина: ${trace.depth} хоп(а) · узлов в графе: ${tNodes.length} · связей: ${tEdges.length} · оборот в выборке: ${fmt(turnover, 0)} ${tEdges[0]?.asset ?? ''} · запросов к источникам: ${trace.fetchesUsed}/30${trace.truncated ? ' · ГРАФ НЕДОСТРОЕН (бюджет запросов free-тарифов)' : ''}`, 8, C.white, 3);
+
+    const dangerCats = new Set(['mixer', 'scam', 'sanctioned']);
+    const dangerLeaks = (trace.leaks ?? []).filter((l) => dangerCats.has(l.category ?? ''));
+    const dangerShare = dangerLeaks.reduce((s, l) => s + l.share, 0);
+    if (dangerShare > 0.02) {
+      textBlock(`Вердикт расследования: ВЫСОКИЙ РИСК — ~${Math.round(dangerShare * 100)}% исходящих переводов цели уходит в рисковые точки (${[...new Set(dangerLeaks.map((l) => categoryRuFull(l.category, l.probable)))].join(', ')}).`, 9, BADC, 3);
+    } else if (dangerLeaks.length || tNodes.some((n) => !n.isRoot && dangerCats.has(n.category ?? ''))) {
+      textBlock('Вердикт расследования: рисковые узлы присутствуют в окружении цели, но прямые исходящие переводы идут на нейтральные адреса.', 9, C.warning, 3);
+    } else {
+      textBlock('Вердикт расследования: рисковых конечных точек не найдено — прямые исходящие идут на нейтральные адреса. Не гарантия чистоты: см. AML-раздел.', 9, OKC, 3);
+    }
+    if (trace.findings?.length) for (const f of trace.findings) textBlock(`• ${f}`, 7.5, C.muted, 1);
+
+    if ((trace.leaks ?? []).length) {
+      section('Куда уходят деньги · итог расследования');
+      textBlock('Крупнейшие направления исходящих переводов целевого кошелька с типом контрагента и долей от исходящего объёма.', 7.5, C.muted, 4);
+      const widthsL = [0.05, 0.36, 0.2, 0.22, 0.17];
+      tableRow(['№', 'АДРЕС', 'ТИП ПОЛУЧАТЕЛЯ', 'СУММА', 'ДОЛЯ'], widthsL, [C.muted, C.muted, C.muted, C.muted, C.muted], 7);
+      for (const [i, l] of (trace.leaks ?? []).slice(0, 10).entries()) {
+        const danger = dangerCats.has(l.category ?? '');
+        tableRow(
+          [String(i + 1), short(l.addr, 12, 10) + (l.label ? ` · ${l.label}` : ''), categoryRuFull(l.category, l.probable), `${fmt(l.amount, 2)} ${l.asset}`, `${Math.round(l.share * 100)}%`],
+          widthsL,
+          [C.muted, danger ? BADC : C.white, danger ? BADC : C.muted, C.white, danger ? BADC : INFOC],
+        );
+      }
+      y += 4;
+    }
+
+    const unmixList = (trace.unmix ?? []) as UnmixFinding[];
+    if (unmixList.length) {
+      section('Распутывание миксеров · unmix-матчинг');
+      textBlock('Статистическое сопоставление депозитов и выводов через миксер: вероятность пары = 1/n совпадающих выводов в временном окне. Оценка вероятностная, не доказательство.', 7.5, C.muted, 4);
+      for (const u of unmixList) {
+        textBlock(`🌀 ${u.mixerLabel ?? 'Миксер'} · ${short(u.mixer, 8, 6)}`, 8.5, BADC, 1);
+        if (u.note) textBlock(u.note, 7, C.muted, 2);
+        const widthsU = [0.34, 0.34, 0.17, 0.15];
+        tableRow(['ДЕПОЗИТ', 'ВЫВОД', 'СУММА', 'СВЯЗЬ'], widthsU, [C.muted, C.muted, C.muted, C.muted], 7);
+        for (const l of u.links.slice(0, 6)) {
+          tableRow([short(l.from, 10, 8), short(l.to, 10, 8), fmt(l.amount, 2), `~${Math.round(l.p * 100)}%`], widthsU, [C.white, C.white, C.white, C.warning]);
+        }
+        y += 4;
+      }
+    }
+  }
+
+  // ---------- МЕТОДОЛОГИЯ / ГЛОССАРИЙ / РЕКОМЕНДАЦИИ (объём и профессиональная рамка) ----------
+  addPage();
+  section('Методология и источники данных');
+  textBlock('Данные собираются в реальном времени из публичных источников и не хранят персональных данных пользователей:', 8, C.white, 2);
+  const sources = [
+    'RPC-узлы TRON / Ethereum / TON / Bitcoin / Solana — балансы и история транзакций адреса;',
+    'публичные реестры меток: биржи, платёжные сервисы, миксеры, мосты, контракты;',
+    'санкционный список OFAC SDN (США) и санкционные реестры — прямое и непрямое совпадение;',
+    'база скам/фишинг-адресов ScamSniffer и собственная база жалоб с модерацией;',
+    'ончейн-проверка freeze-листов эмитентов стейблкоинов (USDT Tether, USDC Circle, isBlackListed);',
+    'GoPlus Security — флаги EVM-адресов (фишинг, ханипот, взломы);',
+    'индекс депозитов миксеров (Tornado Cash и др.) для unmix-матчинга;',
+    'TON DNS и NFT-связи для OSINT-привязки адресов к Telegram-аккаунтам;',
+    'курсы активов CoinGecko для пересчёта объёмов в USD.',
+  ];
+  for (const s of sources) textBlock(`• ${s}`, 7.5, C.white, 1);
+  y += 3;
+  textBlock('AML-скоринг: каждый источник «грязи» оценивается как base × доля входящего объёма × затухание по времени контакта (base: прямой контакт 100, 1 хоп 70, 2 хопа 45, 3 хопа 20; затухание 0,5^лет). Итоговая оценка объединяет источники вероятностно: 100 × (1 − Π(1 − score/100)). Уровни: 0–20 чистый, 21–40 низкий, 41–60 средний, 61–80 высокий, 81–100 критический.', 7.5, C.muted, 3);
+  textBlock('Ограничения честно: анализируется выборка последних транзакций (не вся история адреса); граф может быть недостроен по бюджету запросов; метки контрагентов вероятностные; отсутствие совпадений не равно гарантии чистоты (закрытые базы и приватные данные не видны). Досье — вероятностная интерпретация публичных данных блокчейна, не юридическое заключение и не финансовый совет.', 7.5, C.warning, 3);
+
+  section('Глоссарий');
+  const glossary: [string, string][] = [
+    ['Хоп', 'расстояние в графе переводов: 1 хоп — прямой контрагент, 2 хопа — контрагент контрагента.'],
+    ['Exposure', 'происхождение входящих средств: распределение входящего объёма по типам источников (биржи, миксеры, санкционные и т.д.).'],
+    ['Миксер', 'сервис, смешивающий чужие переводы, чтобы разорвать связь отправитель→получатель (Tornado Cash и др.).'],
+    ['Unmix', 'статистический подбор: какой вывод из миксера, вероятно, соответствует какому депозиту (вероятность 1/n).'],
+    ['Транзитность', 'доля входящих средств, ушедших дальше сразу или почти сразу (кошелёк-«проводник»).'],
+    ['Fan-out', 'раздача: сколько разных получателей получило деньги от адреса (признак раздачи/выплаты).'],
+    ['Dust', 'пыль — входы на копейки, шум для скоринга, учитываются отдельно.'],
+    ['Вероятностная метка', 'тип адреса угадан по структуре потоков (помечен «?»), а не взят из публичного реестра.'],
+    ['Freeze-лист', 'список замороженных адресов внутри контракта стейблкоина: такие адреса не могут перевести свои USDT/USDC.'],
+  ];
+  for (const [term, def] of glossary) textBlock(`${term} — ${def}`, 7.5, C.white, 1);
+
+  section('Рекомендации');
+  const amlMax = Math.max(0, ...report.chains.map((c) => c.aml?.score ?? 0));
+  const effLevel = amlMax > report.verdict.score ? (amlMax > 80 ? 'critical' : amlMax > 60 ? 'high' : amlMax > 40 ? 'medium' : 'low') : report.verdict.level;
+  const recs: Record<string, string[]> = {
+    clean: ['Признаков риска не обнаружено. Рутинные меры предосторожности:', '• не отправляй крупную сумму одним переводом — сделай тестовый;', '• перепроверь адрес перед отправкой (скам-подмена буфера обмена);', '• повтори проверку перед крупной сделкой — данные меняются.'],
+    low: ['Риск низкий. Рекомендуется:', '• стандартные меры: тестовый перевод, проверка адреса, повторная проверка перед крупной суммой;', '• при новых переводах следи за изменением профиля (мониторинг в боте).'],
+    medium: ['Умеренный риск. Рекомендуется:', '• при суммах выше ~$1 000 запроси у контрагента источник средств (другой биржевой кошелёк, документ);', '• предпочтителен тестовый перевод и частичная оплата;', '• избегай прямых платежей без подтверждения личности контрагента.'],
+    high: ['Высокий риск. Рекомендуется:', '• воздержаться от перевода, пока контрагент не подтвердит происхождение средств;', '• запросить KYC/видеоподтверждение, проверку через регулируемый сервис;', '• рассмотреть альтернативного контрагента; при обязательности сделки — разбить платежи с проверкой после каждого.'],
+    critical: ['Критический риск. Рекомендуется:', '• НЕ совершать перевод: прямые связи со санкционной/скам-инфраструктурой или freeze-листом;', '• зафиксируй доказательства (это досье, хэши транзакций) до любых действий;', '• при получении средств от такого адреса — не переводи дальше: freeze может коснуться и тебя;', '• эскалация: комплаенс/безопасность платформы, правоохранительные органы.'],
+  };
+  textBlock(`Итоговая оценка: ${report.verdict.score}/100 (${levelRu(report.verdict.level)})${amlMax > report.verdict.score ? ` · с учётом AML: ${Math.round(amlMax)}/100 (${levelRu(effLevel)})` : ''}`, 9, effLevel === 'critical' || effLevel === 'high' ? BADC : effLevel === 'medium' ? C.warning : OKC, 3);
+  for (const r of recs[effLevel] ?? recs.low) textBlock(r, 7.5, C.white, 1);
 
   // Repeat the disclosure and page count on every page.
   const pages = doc.getNumberOfPages();
