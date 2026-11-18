@@ -519,17 +519,37 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
     const unmixList = (trace.unmix ?? []) as UnmixFinding[];
     if (unmixList.length) {
       section('Распутывание миксеров · unmix-матчинг');
-      textBlock('Сопоставление депозитов и выводов через миксер по методологии открытых исследований (arXiv 2510.09433): H1 — переиспользование адреса (0.9), H2 — прямой перевод между сторонами (0.75), H3 — FIFO по времени того же номинала (0.2–0.35); нижняя граница — классическая база 1/n в окне 24 ч. Балансовая сходимость — приём SlowMist. Оценка вероятностная, не доказательство.', 7.5, C.muted, 4);
+      textBlock('Сопоставление депозитов и выводов через миксер по методологии открытых исследований (arXiv 2510.09433): H1 — переиспользование адреса (0.9), H2 — прямой перевод между сторонами (0.75), H3 — FIFO по времени того же номинала (0.2–0.35); нижняя граница — классическая база 1/n в окне 24 ч. Балансовая сходимость — приём SlowMist. Каждая связь ниже — «история» простым языком; в скобках — уверенность движка. Оценка вероятностная, не доказательство.', 7.5, C.muted, 4);
+      const umT = (ts?: number) => ts ? new Date(ts * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) : '—';
+      const umLat = (a?: number, b?: number) => {
+        if (!a || !b || b <= a) return 'некоторое время';
+        const m = Math.round((b - a) / 60);
+        return m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${m % 60} мин`;
+      };
+      const umWord = (p: number) => (p >= 0.8 ? 'почти наверняка' : p >= 0.5 ? 'скорее всего' : p >= 0.3 ? 'возможно' : 'маловероятно');
+      const umStory = (kind: string, a: string, t1: string, lat: string, t2: string) => kind === 'H1'
+        ? `Кошелёк цели внёс ${a} в ${t1}, а через ${lat} этот же кошелёк забрал ${a} обратно.`
+        : kind === 'H2'
+          ? `Внёс ${a} в ${t1}, вышел в ${t2} и сразу был переведён на соседний кошелёк — перевод между ними виден в блокчейне напрямую.`
+          : kind === 'H3'
+            ? `Внёс ${a} в ${t1}, вышел в ${t2} — первым из очереди после депозита. Похоже на те же деньги, но это совпадение по поведению, а не прямая связь.`
+            : `Совпал с чужим выводом только суммой (${a}). В окне были другие похожие выводы — скорее всего, это просто совпадение.`;
       for (const u of unmixList) {
-        textBlock(`🌀 ${u.mixerLabel ?? 'Миксер'} · ${short(u.mixer, 8, 6)}`, 8.5, BADC, 1);
-        if (u.note) textBlock(u.note, 7, C.muted, 2);
-        const widthsU = [0.3, 0.3, 0.14, 0.13, 0.13];
-        tableRow(['ДЕПОЗИТ', 'ВЫВОД', 'СУММА', 'СВЯЗЬ', 'МЕТОД'], widthsU, [C.muted, C.muted, C.muted, C.muted, C.muted], 7);
-        for (const l of u.links.slice(0, 6)) {
-          const meth = (l.method ?? '1/n').split(' ')[0] + (l.looped ? ' ↻' : '');
-          tableRow([short(l.from, 10, 8), short(l.to, 10, 8), fmt(l.amount, 2), `~${Math.round(l.p * 100)}%`, meth], widthsU, [C.white, C.white, C.white, C.warning, C.muted]);
-        }
-        y += 4;
+        const unit = u.note.match(/Номинал [\d.,]+\s*([A-Za-z]{2,6})/)?.[1] ?? '';
+        textBlock(`🌀 ${u.mixerLabel ?? 'Миксер'}${unit ? ` · номинал ${unit}` : ''} · ${short(u.mixer, 8, 6)} · ${u.links.length} связей из ${u.deposits.length} депозитов`, 8.5, BADC, 1);
+        if (u.note) textBlock(u.note, 7, C.muted, 3);
+        if (!u.links.length) continue;
+        u.links.slice(0, 8).forEach((l, j) => {
+          const kind = (l.method ?? '1/n').split(' ')[0];
+          const d = u.deposits.find((x) => x.addr === l.from);
+          const w = u.outputs.find((x) => x.addr === l.to);
+          const a = `${fmt(l.amount, 2)}${unit ? ` ${unit}` : ''}`;
+          const story = umStory(kind, a, umT(d?.ts), umLat(d?.ts, w?.ts), umT(w?.ts));
+          const col = l.p >= 0.8 ? BADC : l.p >= 0.5 ? C.warning : C.white;
+          textBlock(`${j + 1}) [~${Math.round(l.p * 100)}% · ${umWord(l.p)}] ${story}${l.looped ? ' ↻ После вывода адрес снова вносил деньги в миксер.' : ''}`, 7.5, col, 1);
+          textBlock(`     ${short(l.from, 10, 8)} → ${short(l.to, 10, 8)} · ${(l.method ?? '1/n')}`, 6.5, C.muted, 3);
+        });
+        textBlock('Как читать: 80%+ — сильные доказательства, 50–80% — веские основания, менее 50% — совпадения (использовать с осторожностью). Время — UTC.', 7, C.muted, 4);
       }
     }
   }

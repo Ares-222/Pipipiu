@@ -409,25 +409,13 @@ export default function Graph({ report, trace, onOpenAddr }: {
         )}
       </div>
 
-      {/* Unmix: статистическое распутывание миксеров (вероятностный матчинг) */}
+      {/* Unmix: «человекочитаемое» распутывание миксеров — утверждённый визуал 18.11 (вердикт + истории связей) */}
       {unmix.length > 0 && (
         <>
           <div className="microlabel" style={{ margin: '16px 4px 6px' }}>Unmix · распутывание миксеров · {unmix.length}</div>
-          <div className="card">
-            {unmix.map((u, i) => (
-              <div key={i} style={{ padding: '8px 0', borderTop: i ? '1px solid var(--border)' : undefined }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--danger)' }}>🌀 {u.mixerLabel ?? 'Миксер'} · <span className="mono" style={{ fontSize: 11 }}>{short(u.mixer, 8, 6)}</span></div>
-                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 3, lineHeight: 1.45 }}>{u.note}</div>
-                {u.links.slice(0, 6).map((l, j) => (
-                  <div key={j} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, fontSize: 12, marginTop: 6 }}>
-                    <span className="mono" style={{ color: 'var(--info)', cursor: 'pointer' }} onClick={() => onOpenAddr(l.from)}>{short(l.from, 6, 4)}</span>
-                    <span className="mono" style={{ color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmt(l.amount)} · связь ~{Math.round(l.p * 100)}%{l.method ? ` · ${l.method.split(' ')[0]}` : ''}{l.looped ? ' ↻' : ''}</span>
-                    <span className="mono" style={{ color: 'var(--warn)', cursor: 'pointer' }} onClick={() => onOpenAddr(l.to)}>{short(l.to, 6, 4)}</span>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
+          {unmix.map((u, i) => (
+            <UnmixStory key={i} u={u} chain={trace?.chain ?? ''} onOpenAddr={onOpenAddr} />
+          ))}
         </>
       )}
 
@@ -487,6 +475,124 @@ function LeakCard({ l, rank, onOpenAddr }: {
           <div style={{ width: `${pct}%`, height: '100%', background: danger ? 'var(--danger)' : col }} />
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------- Unmix: карточка «человеческим языком» (утверждено заказчиком 18.11) ----------
+// Чёрный + красный, уверенность — яркостью красного. История каждой связи — одна понятная фраза.
+const UM_WORDS: Array<[number, string, string]> = [
+  [0.8, 's3', 'почти наверняка'], [0.5, 's2', 'скорее всего'], [0.3, 's1', 'возможно'], [0, 's0', 'маловероятно'],
+];
+const UM_METHOD_CHIP: Record<string, { text: string; strong?: boolean }> = {
+  H1: { text: 'один и тот же адрес внёс и выводил', strong: true },
+  H2: { text: 'прямой перевод виден в блокчейне', strong: true },
+  H3: { text: 'первый совпадающий вывод (FIFO)' },
+  '1/n': { text: 'совпала только сумма' },
+};
+const UM_STORY: Record<string, (a: string, t1: string, lat: string, t2: string) => string> = {
+  H1: (a, t1, lat) => `Кошелёк цели внёс ${a} в ${t1}, а через ${lat} этот же кошелёк забрал ${a} обратно.`,
+  H2: (a, t1, lat, t2) => `Внёс ${a} в ${t1}, вышел в ${t2} и сразу был переведён на соседний кошелёк — перевод между ними виден в блокчейне напрямую.`,
+  H3: (a, t1, lat, t2) => `Внёс ${a} в ${t1}, вышел в ${t2} — первым из очереди после депозита. Похоже на те же деньги, но это совпадение по поведению, а не прямая связь.`,
+  '1/n': (a) => `Совпал с чужим выводом только суммой (${a}). В окне были другие похожие выводы — скорее всего, это просто совпадение.`,
+};
+function umLevel(p: number): [number, string, string] { return UM_WORDS.find(([min]) => p >= min) ?? UM_WORDS[3]; }
+function umTime(ts?: number): string {
+  return ts ? new Date(ts * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) : '';
+}
+function umLat(ms?: number, mw?: number): string {
+  if (!ms || !mw || mw <= ms) return '';
+  const m = Math.round((mw - ms) / 60);
+  return m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${m % 60} мин`;
+}
+function UnmixStory({ u, chain, onOpenAddr }: { u: UnmixFinding; chain: string; onOpenAddr: (a: string) => void }) {
+  const rec = Number((u.note.match(/сходимость ~(\d+)%/) ?? [])[1] ?? NaN);
+  const loops = Number((u.note.match(/циклов повторного входа: (\d+)/) ?? [])[1] ?? 0);
+  const unit = u.note.match(/Номинал [\d.,]+\s*([A-Za-z]{2,6})/)?.[1] ?? ({ ethereum: 'ETH', tron: 'TRX', bsc: 'BNB' } as Record<string, string>)[chain] ?? '';
+  const sumD = u.deposits.reduce((s, d) => s + d.amount, 0);
+  const traced = u.links.reduce((s, l) => s + l.amount, 0);
+  return (
+    <div className="card" style={{ marginBottom: 10 }}>
+      <div className="um-mxhead">
+        <div className="um-mxico">🌀</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 800 }}>{u.mixerLabel ?? 'Миксер'}{unit ? ` · номинал ${unit}` : ''}</div>
+          <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 2, wordBreak: 'break-all' }}>
+            {short(u.mixer, 8, 6)} · {u.links.length} связей из {u.deposits.length} депозитов
+          </div>
+        </div>
+      </div>
+      <div className="um-verdict">
+        <div style={{ fontSize: 13, fontWeight: 800 }}>
+          {u.links.length ? 'Деньги прошли через миксер — след потерян?' : 'Деньги в миксере есть — пар не нашлось'}
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+          {u.links.length
+            ? 'Миксер смешивает чужие переводы, чтобы спрятать след. Но следы остаются — вот что удалось восстановить.'
+            : 'Индекс выводов пополняется кроном: повтори расследование позже — пары могут найтись.'}
+        </div>
+        {u.links.length > 0 && !Number.isNaN(rec) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+            <div style={{ flex: 1, height: 8, borderRadius: 99, background: 'rgba(10,10,11,.6)', overflow: 'hidden' }}>
+              <div style={{ width: `${rec}%`, height: '100%', background: 'linear-gradient(90deg, var(--red), #FF6B57)' }} />
+            </div>
+            <span className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+              {Number.isNaN(rec) ? '' : `сходимость ~${rec}%`}{unit ? ` · ~${fmt(traced, 1)} из ${fmt(sumD, 1)} ${unit}` : ''}{loops ? ` · циклов ↻ ${loops}` : ''}
+            </span>
+          </div>
+        )}
+      </div>
+      {u.links.length > 0 && (
+        <div>
+          {u.links.slice(0, 5).map((l, j) => {
+            const kind = (l.method ?? '1/n').split(' ')[0];
+            const [, sc, word] = umLevel(l.p);
+            const d = u.deposits.find((x) => x.addr === l.from);
+            const w = u.outputs.find((x) => x.addr === l.to);
+            const lat = umLat(d?.ts, w?.ts);
+            const a = fmt(l.amount, 2) + (unit ? ` ${unit}` : '');
+            const story = (UM_STORY[kind] ?? UM_STORY['1/n'])(a, umTime(d?.ts) || '—', lat || 'некоторое время', umTime(w?.ts) || '—');
+            const chip = UM_METHOD_CHIP[kind] ?? UM_METHOD_CHIP['1/n'];
+            return (
+              <div className="um-srow" key={j}>
+                <div className="um-num">{j + 1}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="um-stext">{story}</div>
+                  <div className="um-shy">
+                    <span className={`um-rw ${chip.strong ? 'strong' : 'soft'}`}>{chip.text}</span>
+                    {l.looped && <span className="um-rw soft">↻ после вывода снова внёс в миксер</span>}
+                  </div>
+                  <div className="mono" style={{ fontSize: 10, color: 'var(--muted)', marginTop: 4 }}>
+                    <span style={{ color: 'var(--muted)', cursor: 'pointer' }} onClick={() => onOpenAddr(l.from)}>{short(l.from, 6, 4)}</span>
+                    {' → '}
+                    <span style={{ color: 'var(--muted)', cursor: 'pointer' }} onClick={() => onOpenAddr(l.to)}>{short(l.to, 6, 4)}</span>
+                  </div>
+                </div>
+                <div className="um-pcol">
+                  <span className={`mono um-v ${sc}`}>{Math.round(l.p * 100)}%</span>
+                  <div className="um-l">{word}</div>
+                  <div className="um-mini"><i className={sc} style={{ width: `${Math.round(l.p * 100)}%` }} /></div>
+                </div>
+              </div>
+            );
+          })}
+          {u.links.length > 5 && (
+            <div style={{ fontSize: 10.5, color: 'var(--muted)', padding: '8px 0 2px', borderTop: '1px solid var(--border)' }}>
+              +{u.links.length - 5} связей ниже порога — полный список в PDF-отчёте
+            </div>
+          )}
+          <div className="um-howto">
+            <b>Как читать цифры.</b> Процент — это уверенность движка, не клятва:{' '}
+            <span style={{ color: '#FF6B57', fontWeight: 700 }}>80%+ сильные доказательства</span> (ошибка маловероятна),{' '}
+            <b>50–80%</b> — веские основания, <b>менее 50%</b> — совпадения, для дела использовать с осторожностью.
+            Чем ярче красный — тем сильнее связь. Время — UTC.
+          </div>
+          <div className="um-foot">
+            ↻ Цикл повторного входа (снова внёс → снова вывел) — классическое поведение «отмывателя», учтено движком.
+            {' '}Оценка вероятностная, не доказательство.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
