@@ -4,3 +4,6 @@ node_modules/
 /tmp/
 wrangler.toml.bak
 data/
+
+# локальный кэш wrangler (account-сессии)
+worker/.wrangler/cache/wrangler-account.json

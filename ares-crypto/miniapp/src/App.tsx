@@ -14,13 +14,15 @@ import Glossary from './screens/Glossary';
 type Screen = 'home' | 'report' | 'graph' | 'monitor' | 'history' | 'settings' | 'aml' | 'glossary';
 
 // Deep link из кнопок бота. Telegram кладёт startapp в initDataUnsafe.start_param
-// только для прямых ссылок; у inline web_app-кнопок параметр остаётся в URL страницы.
+// для прямых ссылок (t.me/бот/AresCryptoAi и t.me/бот?startapp=...); у inline
+// web_app-кнопок параметр остаётся в URL страницы. При запуске t.me-ссылки из
+// браузера (tgme-превью) start_param приходит GET-параметром tgWebAppStartParam.
 // Префикс AML: — запуск авто-AML-досье (кнопка «🛡 AML-отчёт (PDF)» в боте).
 function deepLinkAddr(): string {
   const sp = webApp()?.initDataUnsafe?.start_param;
   if (sp) return sp.trim();
   const q = new URLSearchParams(window.location.search);
-  return (q.get('startapp') ?? q.get('addr') ?? '').trim();
+  return (q.get('startapp') ?? q.get('addr') ?? q.get('tgWebAppStartParam') ?? '').trim();
 }
 
 export default function App() {
