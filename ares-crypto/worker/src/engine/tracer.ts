@@ -171,7 +171,10 @@ export async function runTrace(
   // unmix (statistical matching, spec §11.4)
   const unmixFindings: UnmixFinding[] = [];
   for (const m of mixerNodes.slice(0, 3)) {
-    const u = await unmixMixer(ctx, chain, m.addr, root, visited, [...edges.values()].map((e) => ({ from: e.from, to: e.to, amount: e.amount, asset: e.asset })));
+    // Метка узла уже проставлена блоком labels выше — в шапке истории показываем
+    // настоящее имя миксера («Tornado.Cash: 1 ETH»), а не generic «Миксер».
+    const mLabel = nodes.get(nodeId(chain, m.addr))?.label?.replace(' (индекс депозитов)', '');
+    const u = await unmixMixer(ctx, chain, m.addr, root, visited, [...edges.values()].map((e) => ({ from: e.from, to: e.to, amount: e.amount, asset: e.asset })), mLabel);
     if (u) unmixFindings.push(u);
   }
 
@@ -201,7 +204,7 @@ export async function runTrace(
   };
 }
 
-async function unmixMixer(ctx: AppCtx, chain: string, mixer: string, rootAddr: string, visited: Set<string>, graphEdges: { from: string; to: string; amount: number; asset: string }[]): Promise<UnmixFinding | null> {
+async function unmixMixer(ctx: AppCtx, chain: string, mixer: string, rootAddr: string, visited: Set<string>, graphEdges: { from: string; to: string; amount: number; asset: string }[], labelHint?: string): Promise<UnmixFinding | null> {
   // v6: скоринг по методологии открытых исследований (arXiv 2510.09433 H1/H2/H3 +
   // SlowMist-сходимость + база 1/n) поверх накопительного D1-индекса крон-коллектора
   // mixindex.ts (раньше индекс наполнялся только ручным scripts/index-tornado.ts).
@@ -210,7 +213,7 @@ async function unmixMixer(ctx: AppCtx, chain: string, mixer: string, rootAddr: s
   const withdrawals = deposits.filter((d) => d.commitment.startsWith('w:'));
   const graphAddrs = new Set([...visited, rootAddr].map((a) => normAddr(chain, a)));
   return buildUnmix({
-    chain, mixer, mixerLabel: 'Миксер', rootAddr, graphAddrs,
+    chain, mixer, mixerLabel: labelHint || 'Миксер', rootAddr, graphAddrs,
     edges: graphEdges, deposits, withdrawals, nowSec,
   });
 }

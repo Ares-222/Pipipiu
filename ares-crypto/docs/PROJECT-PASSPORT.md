@@ -1,12 +1,30 @@
 # ARES CRYPTO — ПАСПОРТ ПРОЕКТА (для переноса в новый чат)
 
 > Документ самодостаточен: новый агент читает его целиком и продолжает работу без контекста старого чата.
-> Состояние на **2026-11-18**. Эталонное дерево: `ares-crypto-transfer-2026-11-17-full-v3.zip`,
-> отпечаток бандла Mini App: **`index-DlGtl8QY.js`**.
-> **Деплой 18.11** (Version ID `55bd7f3f-d975-4991-9745-6336f3ce9776`): бандл DlGtl8QY на живой
+> Состояние на **2026-11-19 (ночь, UTC+3)**. Эталонное дерево: `ares-crypto-transfer-2026-11-17-full-v3.zip`,
+> отпечаток бандла Mini App: **`index-DlGtl8QY.js`** (с деплоя 18.11 не менялся).
+> **Деплой 19.11 ночь** (Version `c7ae288f-3bc2-4c32-bdde-2ef3032ad091`, только воркер): mixerLabel в
+> unmix-историях = настоящая метка узла («Tornado.Cash: 1 ETH»), раньше — generic «Миксер».
+> **Деплой 18.11** (Version `55bd7f3f-d975-4991-9745-6336f3ce9776`): бандл DlGtl8QY на живой
 > странице, healthz ok, `_headers` применяются; добавлена прямая ссылка Mini App через BotFather
 > /newapp → **`https://t.me/Snwbdoiwhcryptoares_bot/AresCryptoAi`** + fallback `tgWebAppStartParam`
 > в App.tsx. Предыдущий задеплоенный бандл 17.11: `index-CFhRGGcD.js` (пакет №5–14).
+> **Menu Button / Main Mini App** переключены заказчиком в BotFather на этот апп 19.11 (подтверждено).
+>
+> **Unmix «человеческим языком» — ПРОВЕРЕН ЖИВЫМ ТРЕЙСОМ 19.11 И РАБОТАЕТ**: демо-кошелёк с историей
+> Tornado → находки «🌀 Tornado.Cash: 1 ETH», связи с уверенностью p≈0.35, метод H3·FIFO, ↻-циклы,
+> балансовая сходимость ~100% (SlowMist-приём). **Покрытие индекса миксеров: eth/bsc/polygon (Tornado
+> Cash Classic). TRON и TON НЕ индексируются** — для TRON/TON-кошельков unmix всегда «честный ноль»
+> (так задумано, не поломка; TRON-миксеры заморожены с 2023, TON-миксеров с публичным индексом нет).
+> Кошелёк заказчика TRKhSYVuCmNLn8a6ghuqCJ4X83usLpffF8: 0/100 clean, AML-хитов 0 — распутывать нечего.
+> Demo-адреса с депозитами в D1-индексе (для показа блока): `0x9c514fc441d70d828198050c100948376aa7d91d`,
+> `0x185d7b65bd417fd72579be9e0c3b4d69888f2e70` (eth, depth 1; PDF с unmix: прогнать граф → кнопка PDF на том же адресе).
+>
+> **ПРАВИЛО ДОСТАВКИ РЕЗУЛЬТАТОВ: файлы в чат НЕ отправлять. Все результаты (фотокарточка, PDF,
+> экспорты) клиент получает через Telegram-бота — sendPhoto/sendDocument из мини-аппа или бота.**
+>
+> **Тестовый клиент в песочнице: `scripts/tg_client.py`** — подписывает валидный initData админа
+> (id 5188446459) и дергает прод-API: `python3 -I scripts/tg_client.py history|report|demo <addr> [depth]`.
 > **Прод восстановлен 17.11 ~18:35 UTC** деплоем из песочницы (Version ID `a096f439-23ab-4496-9ac8-abc923256af2`),
 > верифицирован: бандл CsE7YMCk на живой странице, healthz ok, _headers применяются, гвард свежести в бандле,
 > в воркере aiComment/freeze/goplus/tgbots. **Приёмка заказчиком подтверждена 17.11 вечером**:
@@ -36,7 +54,8 @@ Tailwind + Cytoscape. Ноль бюджета: только free-тиры; тя�
 | CF Account ID | `5056771695e953ca49fa8203a83a4b6f` |
 | Воркер | `ares-crypto` |
 | TG бот | `@Snwbdoiwhcryptoares_bot`, bot id `9058426452` |
-| Mini App — прямая ссылка | https://t.me/Snwbdoiwhcryptoares_bot/AresCryptoAi (BotFather `/newapp`, создана 18.11; fullscreen, Bot API 7.6+) |
+| Mini App — прямая ссылка | https://t.me/Snwbdoiwhcryptoares_bot/AresCryptoAi (BotFather `/newapp`, создана 18.11; fullscreen, Bot API 7.6+; Menu Button переведён на неё 19.11) |
+| Demo-адрес unmix (eth) | `0x9c514fc441d70d828198050c100948376aa7d91d`, `0x185d7b65bd417fd72579be9e0c3b4d69888f2e70` — депозиты Tornado в D1-индексе; граф depth 1 → блок «Unmix» под графом |
 | Чат админа (ADMIN_ID, var в wrangler.toml) | `5188446459` |
 | D1 | binding `DB`, имя `ares`, id `12bfcbd3-a7ed-4d9c-865f-c2358b39c0ba` |
 | KV | binding `CACHE`, id `adb397a8acf7491d8d54614c0236d224` |
@@ -53,8 +72,12 @@ Tailwind + Cytoscape. Ноль бюджета: только free-тиры; тя�
 | **CF Account ID** | `5056771695e953ca49fa8203a83a4b6f` |
 | **GitHub PAT** | `ghp_(PAT — в переносном паспорте, в git не хранится)` (login `Ares-222`, scopes: repo, workflow и др.; проверен 17.11; git push/clone и API) |
 | OPENROUTER_API_KEY | **НЕ задан** → `/ai` отвечает честной инструкцией, пока не выполнить `wrangler secret put OPENROUTER_API_KEY` |
-| OPENROUTER_MODEL | не задан (авто-выбор из `:free`-списка `/api/v1/models` в рантайме) |
-| TRONGRID_KEY / ETHERSCAN_KEY | ЗАДАНЫ как секреты воркера (проверено через API settings 17.11) |
+| OPENROUTER_MODEL | **задан как var** = `baidu/ernie-5.5-flash-preview:free` (виден в выводе deploy 18.11) |
+| TRONGRID_KEY / ETHERSCAN_KEY | ЗАДАНЫ как секреты воркера (проверено через API settings 17.11); значения через CF API не читаются — при переносе переустановить `wrangler secret put` |
+
+**Решение заказчика (19.11):** ключи выше сознательно хранятся в паспорте для переноса в новый чат;
+после завершения проекта заказчик перевыпускает их вручную. Секреты воркера (TRONGRID_KEY,
+ETHERSCAN_KEY) через Cloudflare API не возвращаются — их достаточно переустановить `wrangler secret put`.
 
 Правила безопасности: токены НЕ коммитить в git (`.env` в `.gitignore`); секреты воркера — только
 через `wrangler secret put`; передавать в чате можно (это переносной паспорт), в публичные места — нет.
@@ -141,6 +164,15 @@ ares-crypto/
   в `initDataUnsafe.start_param` **и** GET `tgWebAppStartParam` — App.tsx читает оба + query
   `startapp`/`addr` (диплинки `?startapp=AML:<addr>` работают со всеми тремя путями). Бандл
   `index-DlGtl8QY.js`, Version `55bd7f3f-d975-4991-9745-6336f3ce9776`.
+- **19.11 — диагностика «unmix не применился» (заказчик)**: код был на проде (строки историй в бандле
+  DlGtl8QY, PDF-секция в makePdf.ts:589 `if (unmixList.length)`); причина пустого блока — у
+  **TRON/TON-кошельков unmix структурно всегда 0**: коллектор mixindex.ts собирает депозиты только
+  eth/bsc/polygon (Tornado Classic, крон */5 round-robin, чекпоинты в KV), в D1 `tx_deposits` на 19.11 —
+  424 eth + 2 polygon строк, tron/ton — нет. Кошелёк TRKhSYVu… — чистый (0/100, AML hits 0) → «честный
+  ноль» корректен. Живое доказательство работоспособности: `/api/graph` на `0x9c514fc4…` → 2 находки
+  (Tornado.Cash: 1 ETH — 3 депозита/3 связи, p≈0.35, H3·FIFO, сходимость ~100%). Polish: `mixerLabel`
+  из метки узла (tracer.ts, Version `c7ae288f…`). TRON/TON-покрытие — потенциальный бэклог (TRON
+  Tornado заморожен 2023, бэкфилл истории через TRONGrid требует per-event tx-lookup, месяцы квот).
 
 ## 7. Квоты и лимиты (free-tier)
 
