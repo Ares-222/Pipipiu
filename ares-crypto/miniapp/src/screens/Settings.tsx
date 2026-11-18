@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { haptic } from '../tg';
 
-export default function Settings({ notify }: { notify: (m: string) => void }) {
+export default function Settings({ notify, onNav }: { notify: (m: string) => void; onNav: (s: 'glossary') => void }) {
   const [settings, setSettings] = useState<{ minAlertUsd: number; traceDepth: number }>({ minAlertUsd: 10, traceDepth: 2 });
   const [quota, setQuota] = useState<{ quick: number; deep: number; aml: number; watches: number }>({ quick: 40, deep: 5, aml: 40, watches: 5 });
   const [user, setUser] = useState<{ quickUsed?: number; deepUsed?: number; amlUsed?: number }>({});
@@ -53,6 +53,7 @@ export default function Settings({ notify }: { notify: (m: string) => void }) {
         </div>
         <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>Квоты — защита лимитов бесплатных провайдеров, не жадность. Обновление в 00:00 UTC.</div>
       </div>
+      <button className="btn" style={{ width: '100%', marginTop: 10, fontSize: 13 }} onClick={() => { haptic(); onNav('glossary'); }}>📚 Глоссарий · что значат термины отчёта</button>
       <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 12 }}>
         Публичные блокчейн-данные. Вероятностные оценки. Не является финансовым советом или юридическим доказательством.
       </div>

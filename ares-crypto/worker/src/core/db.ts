@@ -66,13 +66,15 @@ export interface DBLike {
   listWatches(chatId?: number): Promise<WatchRow[]>;
   updateWatchState(id: number, lastStateJson: string, lastCheck: number, active?: boolean): Promise<void>;
   addWatchEvents(events: Omit<WatchEventRow, 'id'>[]): Promise<void>;
-  listWatchEvents(watchIds: number[], limit: number): Promise<WatchEventRow[]>;
+  listWatchEvents(watchIds: number[], limit: number, sinceTs?: number): Promise<WatchEventRow[]>;
   markEventsNotified(ids: number[]): Promise<void>;
+  updateWatchMinUsd(id: number, minUsd: number): Promise<void>;
 
   // traces (deep investigations)
   saveTrace(t: TraceRow): Promise<number>;
   getTrace(id: number): Promise<TraceRow | null>;
   updateTrace(id: number, patch: Partial<Pick<TraceRow, 'status' | 'stateJson' | 'resultJson'>>): Promise<void>;
+  listTraces(chatId: number, limit: number): Promise<TraceRow[]>;
 
   // users & quotas
   getUser(chatId: number): Promise<UserRow | null>;
@@ -82,6 +84,7 @@ export interface DBLike {
   // checks history
   addCheck(c: Omit<CheckRow, 'id'>): Promise<void>;
   listChecks(chatId: number, limit: number): Promise<CheckRow[]>;
+  lastCheckForInput(chatId: number, input: string): Promise<CheckRow | null>;
 
   // error log
   addErrorLog(where: string, message: string): Promise<void>;
@@ -191,11 +194,17 @@ export class MemoryDB implements DBLike {
   async addWatchEvents(events: Omit<WatchEventRow, 'id'>[]): Promise<void> {
     for (const e of events) this.watchEvents.push({ ...e, id: this.watchEvents.length + 1 });
   }
-  async listWatchEvents(watchIds: number[], limit: number): Promise<WatchEventRow[]> {
-    return this.watchEvents.filter((e) => watchIds.includes(e.watchId)).sort((a, b) => b.ts - a.ts).slice(0, limit);
+  async listWatchEvents(watchIds: number[], limit: number, sinceTs?: number): Promise<WatchEventRow[]> {
+    return this.watchEvents
+      .filter((e) => watchIds.includes(e.watchId) && (sinceTs === undefined || e.ts >= sinceTs))
+      .sort((a, b) => b.ts - a.ts).slice(0, limit);
   }
   async markEventsNotified(ids: number[]): Promise<void> {
     for (const e of this.watchEvents) if (ids.includes(e.id)) e.notified = true;
+  }
+  async updateWatchMinUsd(id: number, minUsd: number): Promise<void> {
+    const w = this.watches.find((x) => x.id === id);
+    if (w) w.minUsd = minUsd;
   }
 
   async saveTrace(t: TraceRow): Promise<number> {
@@ -209,6 +218,13 @@ export class MemoryDB implements DBLike {
   async updateTrace(id: number, patch: Partial<Pick<TraceRow, 'status' | 'stateJson' | 'resultJson'>>): Promise<void> {
     const t = this.traces.find((x) => x.id === id);
     if (t) Object.assign(t, patch);
+  }
+  async listTraces(chatId: number, limit: number): Promise<TraceRow[]> {
+    return this.traces
+      .filter((t) => t.chatId === chatId && t.status === 'done' && !!t.resultJson)
+      .sort((a, b) => b.createdTs - a.createdTs)
+      .slice(0, limit)
+      .map((t) => ({ ...t, resultJson: undefined }));
   }
 
   async getUser(chatId: number): Promise<UserRow | null> {
@@ -226,6 +242,11 @@ export class MemoryDB implements DBLike {
   }
   async listChecks(chatId: number, limit: number): Promise<CheckRow[]> {
     return this.checks.filter((c) => c.chatId === chatId).sort((a, b) => b.createdTs - a.createdTs).slice(0, limit);
+  }
+  async lastCheckForInput(chatId: number, input: string): Promise<CheckRow | null> {
+    return this.checks
+      .filter((c) => c.chatId === chatId && c.input === input)
+      .sort((a, b) => b.createdTs - a.createdTs)[0] ?? null;
   }
 
   async addErrorLog(where: string, message: string): Promise<void> {

@@ -3,6 +3,7 @@
 
 import { jsPDF } from 'jspdf';
 import { fmt, fmtUsd, levelRu, categoryRu, categoryRuFull, short, type ChainReport, type Tx, type WalletReport, type TraceResult, type UnmixFinding } from '../api';
+import { qrMatrix } from '../lib/qr';
 import { renderCardJpeg } from '../card/card';
 import { renderDirectFlowGraph } from './flowGraph';
 
@@ -336,6 +337,27 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
       textBlock(`Не удалось отрисовать граф: ${(e as Error).message}`, 8, C.warning);
     }
 
+    // №13 QR: адрес — сканером, без копирования (анти-скам подмена буфера обмена).
+    const qr = qrMatrix(cr.account.addr);
+    if (qr) {
+      ensureSpace(240);
+      section('QR · проверка адреса сканером');
+      const qs = 176;
+      const qx = (W - qs) / 2;
+      const qy = y + 8;
+      const cellQ = (qs - 24) / qr.size;
+      doc.setFillColor(255, 255, 255);
+      doc.roundedRect(qx, qy, qs, qs, 8, 8, 'F');
+      doc.setFillColor(10, 10, 11);
+      for (let r = 0; r < qr.size; r++) {
+        for (let c = 0; c < qr.size; c++) {
+          if (qr.dark[r][c]) doc.rect(qx + 12 + c * cellQ, qy + 12 + r * cellQ, cellQ, cellQ, 'F');
+        }
+      }
+      y = qy + qs + 12;
+      textBlock(`Наведи камеру — адрес ${short(cr.account.addr, 10, 8)} подставится без копирования. Защита от скам-подмены буфера обмена: всегда сверяй первые и последние символы.`, 7.5, C.muted, 4);
+    }
+
     const recipients = recipientSummaries(cr);
     if (recipients.length) {
       section(`Исходящие адреса · ${recipients.length}`);
@@ -499,6 +521,53 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
       textBlock('Вердикт расследования: рисковых конечных точек не найдено — прямые исходящие идут на нейтральные адреса. Не гарантия чистоты: см. AML-раздел.', 9, OKC, 3);
     }
     if (trace.findings?.length) for (const f of trace.findings) textBlock(`• ${f}`, 7.5, C.muted, 1);
+
+    // №9 Схема потока: корень → крупнейшие конечные точки (рисуем прямо в PDF).
+    const leakNodes = (trace.leaks ?? []).slice(0, 6);
+    const GRAY_LINE: RGB = [90, 90, 96];
+    if (leakNodes.length) {
+      ensureSpace(130 + leakNodes.length * 52);
+      section('Схема потока · корень → конечные точки');
+      const boxW = 158;
+      const boxH = 40;
+      const rowH = 52;
+      const cy0 = y + 42;
+      const xRoot = margin + 8;
+      const xLeak = W - margin - boxW - 8;
+      const cyMid = cy0 + ((leakNodes.length - 1) * rowH) / 2;
+      // корневой бокс
+      doc.setFillColor(26, 26, 29);
+      doc.setDrawColor(...C.red);
+      doc.setLineWidth(1.2);
+      doc.roundedRect(xRoot, cyMid - boxH / 2, boxW, boxH, 6, 6, 'FD');
+      doc.setTextColor(...C.white);
+      doc.setFontSize(8.5);
+      doc.text('ЦЕЛЬ', xRoot + boxW / 2, cyMid - 6, { align: 'center' });
+      doc.setTextColor(...C.muted);
+      doc.setFontSize(7);
+      doc.text(short(trace.root, 8, 6), xRoot + boxW / 2, cyMid + 6, { align: 'center' });
+      // получатели + стрелки
+      leakNodes.forEach((l, i) => {
+        const ly = cy0 + i * rowH;
+        const danger = dangerCats.has(l.category ?? '');
+        doc.setDrawColor(...(danger ? BADC : GRAY_LINE));
+        doc.setLineWidth(danger ? 1.4 : 0.8);
+        doc.line(xRoot + boxW, cyMid - 4, xLeak - 9, ly - 4);
+        doc.setFillColor(...(danger ? BADC : GRAY_LINE));
+        doc.triangle(xLeak - 9, ly - 8, xLeak - 9, ly, xLeak - 1, ly - 4, 'F');
+        doc.setFillColor(19, 19, 21);
+        doc.setDrawColor(...(danger ? BADC : C.border));
+        doc.roundedRect(xLeak, ly - boxH / 2, boxW, boxH, 6, 6, 'FD');
+        doc.setTextColor(...(danger ? BADC : C.white));
+        doc.setFontSize(7.5);
+        doc.text(categoryRuFull(l.category, l.probable).slice(0, 30), xLeak + boxW / 2, ly - 6, { align: 'center' });
+        doc.setTextColor(...C.muted);
+        doc.setFontSize(6.5);
+        doc.text(`${short(l.addr, 8, 6)} · ${fmt(l.amount, 2)} ${l.asset} · ${Math.round(l.share * 100)}%`, xLeak + boxW / 2, ly + 6, { align: 'center' });
+      });
+      y = cy0 + leakNodes.length * rowH + 10;
+      textBlock('Красные стрелки — рисковые получатели (миксер/скам/санкции), серые — нейтральные. Суммы и доли — за выборку расследования.', 7, C.muted, 4);
+    }
 
     if ((trace.leaks ?? []).length) {
       section('Куда уходят деньги · итог расследования');

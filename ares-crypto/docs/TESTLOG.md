@@ -437,3 +437,32 @@
 - ДЕПЛОЙ: НЕ ВЫПОЛНЕН из песочницы — wrangler не аутентифицирован в этой сессии
   (нет CLOUDFLARE_API_TOKEN). Команда для Codespace: `cd worker && npx wrangler deploy`,
   после — сверка отпечатка `index-SX56_Ki7.js` на живой странице (§4 паспорта).
+
+## 18.11 — Пакет «Делай все» (14 улучшений из списка заказчика)
+- №1 unmix-визуал задеплоен на прод ДО пакета (бандл index-SX56_Ki7.js, отпечаток подтверждён).
+- №2/№3 секреты ETHERSCAN_KEY / TRONGRID_KEY / TONCENTER_KEY / OPENROUTER_API_KEY установлены
+  через `wrangler secret put` (деплой #1). OPENROUTER_MODEL=baidu/ernie-5.5-flash-preview:free
+  в [vars] (проверена живым вызовом: старые free-модели мертвы, список запрошен по API;
+  429 при серии вызовов — честная деградация ai.ts).
+- №4 GoPlus: из песочницы TLS-блок (test-live-checks OK, честный null). Живая проверка —
+  из воркера при /check; в песочнице не воспроизводится, отмечено как open item.
+- №5 «Из чего сложился скоринг»: Report.tsx — вклады AML-источников в noisy-OR итог.
+- №6 Глоссарий: новый экран Glossary.tsx (11 терминов простым языком), вход из «Настроек».
+- №7 История расследований: /graph сохраняет trace в D1 (cap 900KB), /trace-history,
+  /trace?id (проверка chatId), History.tsx — «Открыть» без повторного прохождения.
+- №8 Мульти-хоп unmix — УЖЕ РЕАЛИЗОВАН в v6 (tracer: mixerNodes до 3, включая промежуточные
+  узлы графа, unmixMixer по каждому); подтверждено кодом, изменений не потребовалось.
+- №9 PDF: раздел «Схема потока · корень → конечные точки» (jsPDF: боксы, стрелки,
+  красные = рисковые; топ-6 утечек).
+- №10 Пороги per-address: /watch POST {minUsd}, /watch-min POST {id,minUsd},
+  db.updateWatchMinUsd; Monitor.tsx — правка порога по ✎.
+- №11 Ежедневная сводка: monitor.ts digestDaily (watch_events за 24ч, группировка по чатам,
+  тишина при пустоте) + cron 0 7 * * * (wrangler.toml, 3 крона ≤ лимита).
+- №12 Share: POST /api/share (KV share:<token>, TTL 7 дней) + публичная GET /r/:token
+  (без initData; api/share.ts renderSharePage — экранирование, смок в test-share-digest).
+- №13 QR: qrcode-generator (npm, MIT, вендор-импорт) → lib/qr.ts; SVG в Report.tsx,
+  белая подложка + модули в makePdf (адрес не уходит во внешние QR-сервисы).
+- №14 Diff повторной проверки: /report возвращает prev (lastCheckForInput ДО записи новой),
+  Report.tsx — баннер «прошлая проверка N/100 · изменилось ±X».
+- Смоки: scripts/test-share-digest.ts — SMOK OK (diff/trace-история/порог/digest/share-HTML);
+  test-live-checks — ✅; miniapp tsc exit 0, vite build OK.

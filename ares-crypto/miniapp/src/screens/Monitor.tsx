@@ -6,6 +6,8 @@ export default function Monitor({ onOpenAddr }: { onOpenAddr: (a: string) => voi
   const [watches, setWatches] = useState<{ id: number; addr: string; chain: string; minUsd: number; active: boolean }[]>([]);
   const [events, setEvents] = useState<{ id: number; direction: string; amount: number; asset: string; counterparty: string; label?: string; ts: number; watchId: number }[]>([]);
   const [error, setError] = useState('');
+  const [editId, setEditId] = useState(0);
+  const [editVal, setEditVal] = useState('');
 
   useEffect(() => {
     api<{ watches: typeof watches; events: typeof events }>('/watchlist')
@@ -18,6 +20,19 @@ export default function Monitor({ onOpenAddr }: { onOpenAddr: (a: string) => voi
     try {
       await api(`/watch?addr=${encodeURIComponent(addr)}`, { method: 'DELETE' });
       setWatches((w) => w.filter((x) => x.addr !== addr));
+    } catch (e) { setError((e as Error).message); }
+  }
+
+  // №10 персональный порог для адреса: алерт придёт только за суммы ≥ порога.
+  async function saveMin(id: number) {
+    haptic();
+    const v = parseFloat(editVal.replace(',', '.'));
+    if (!isFinite(v) || v < 0) { setError('Порог — число ≥ 0'); return; }
+    try {
+      await api('/watch-min', { method: 'POST', body: JSON.stringify({ id, minUsd: v }) });
+      setWatches((w) => w.map((x) => (x.id === id ? { ...x, minUsd: v } : x)));
+      setEditId(0);
+      setError('');
     } catch (e) { setError((e as Error).message); }
   }
 
@@ -35,7 +50,17 @@ export default function Monitor({ onOpenAddr }: { onOpenAddr: (a: string) => voi
           <span className="dot" style={{ background: 'var(--ok)' }} />
           <div style={{ flex: 1 }}>
             <div className="mono" style={{ fontSize: 12 }}>{short(w.addr, 10, 6)}</div>
-            <div style={{ fontSize: 11, color: 'var(--muted)' }}>{w.chain} · фильтр ≥ ${w.minUsd}</div>
+            {editId === w.id ? (
+              <div style={{ display: 'flex', gap: 6, marginTop: 4, alignItems: 'center' }}>
+                <input value={editVal} onChange={(e) => setEditVal(e.target.value)} placeholder={`${w.minUsd}`} style={{ margin: 0, width: 90, fontSize: 12 }} inputMode="decimal" />
+                <button className="btn btn-red" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => void saveMin(w.id)}>OK</button>
+                <button className="btn" style={{ fontSize: 11, padding: '5px 10px' }} onClick={() => setEditId(0)}>✕</button>
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, color: 'var(--muted)', cursor: 'pointer' }} onClick={() => { haptic(); setEditId(w.id); setEditVal(String(w.minUsd)); }}>
+                {w.chain} · порог ≥ ${w.minUsd} <span style={{ color: 'var(--info)' }}>✎</span>
+              </div>
+            )}
           </div>
           <button className="btn" style={{ fontSize: 11, padding: '6px 10px' }} onClick={() => onOpenAddr(w.addr)}>📊</button>
           <button className="btn" style={{ fontSize: 11, padding: '6px 10px' }} onClick={() => unwatch(w.addr)}>✕</button>

@@ -13,9 +13,11 @@ import { AdapterRegistry } from './adapters/registry.ts';
 import { BotApi } from './tg/bot.ts';
 import { handleUpdate } from './tg/router.ts';
 import { handleApi } from './api/routes.ts';
-import { monitorCycle } from './engine/monitor.ts';
+import { renderSharePage } from './api/share.ts';
+import { monitorCycle, digestDaily } from './engine/monitor.ts';
 import { collectMixerIndex } from './engine/mixindex.ts';
 import { syncOfac, syncScamSniffer, downloadOfac, downloadScamSniffer } from './engine/feeds.ts';
+import type { WalletReport } from './core/types.ts';
 import type { TgUpdate } from './tg/bot-types.ts';
 import { TracerDO } from './do/tracer-do.ts';
 import { MonitorDO } from './do/monitor-do.ts';
@@ -97,6 +99,20 @@ export default {
       }, url);
     }
 
+    // №12 share: публичная страница «только чтение» — без initData, токен в KV.
+    if (url.pathname.startsWith('/r/') && req.method === 'GET') {
+      const token = url.pathname.slice(3);
+      if (!/^[0-9a-f]{16,32}$/.test(token)) return new Response('not found', { status: 404 });
+      const js = await ctx.kv.get(`share:${token}`);
+      if (!js) return new Response('снимок не найден или истёк (срок жизни — 7 дней)', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+      try {
+        const rep = JSON.parse(js) as WalletReport;
+        return new Response(renderSharePage(rep, token), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+      } catch {
+        return new Response('снимок повреждён', { status: 500 });
+      }
+    }
+
     if (url.pathname === '/healthz') {
       return new Response(JSON.stringify({ ok: true, ts: Date.now(), breaker: ctx.breaker.status() }), { headers: { 'content-type': 'application/json' } });
     }
@@ -120,6 +136,16 @@ export default {
         await api.sendMessage(ctx.cfg.adminId, ` syncing done: OFAC ${r.inserted}, ScamSniffer ${s}`).catch(() => { /* ignore */ });
       } catch (e) {
         await ctx.db.addErrorLog('cron-sync', String((e as Error).message));
+      }
+      return;
+    }
+
+    // №11 ежедневная сводка по списку наблюдения (07:00 UTC): что изменилось за сутки.
+    if (event.cron === '0 7 * * *') {
+      try {
+        await digestDaily(ctx, (chatId, text) => api.sendMessage(chatId, text));
+      } catch (e) {
+        await ctx.db.addErrorLog('cron-digest', String((e as Error).message));
       }
       return;
     }

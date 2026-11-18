@@ -5,6 +5,7 @@ import type { AppCtx } from '../core/ctx.ts';
 import type { AdapterRegistry } from '../adapters/registry.ts';
 import { validateInitData } from '../core/tgauth.ts';
 import { buildWalletReport, buildTxCard } from '../service/report.ts';
+import type { WalletReport } from '../core/types.ts';
 import { runTrace } from '../engine/tracer.ts';
 import { addWatch, monitorCycle } from '../engine/monitor.ts';
 import { getUser, getSettings, updateSettings, checkQuota, incQuota, quotaText } from '../engine/quota.ts';
@@ -44,10 +45,16 @@ export async function handleApi(req: Request, deps: ApiDeps, url: URL): Promise<
       const addr = url.searchParams.get('addr') ?? '';
       const q = await checkQuota(ctx, chatId, 'quick');
       if (!q.ok) return err(quotaText('quick', q.left, q.resetLocal), 429);
+      // №14 diff повторной проверки: предыдущая проверка того же адреса — до записи новой.
+      const prev = await ctx.db.lastCheckForInput(chatId, addr);
       const rep = await buildWalletReport(ctx, deps.registry, addr);
       await incQuota(ctx, chatId, 'quick');
       await ctx.db.addCheck({ chatId, input: addr, chain: rep.chains[0]?.chain ?? '', verdict: `${rep.verdict.score}/100`, createdTs: ctx.now(), summaryJson: JSON.stringify({ from: 'miniapp' }) });
-      return json({ ok: true, report: rep });
+      const prevScore = prev ? parseInt(prev.verdict, 10) : NaN;
+      return json({
+        ok: true, report: rep,
+        prev: prev && !Number.isNaN(prevScore) ? { score: prevScore, ts: prev.createdTs } : undefined,
+      });
     }
 
     // ---- transaction card ----
@@ -74,7 +81,31 @@ export async function handleApi(req: Request, deps: ApiDeps, url: URL): Promise<
       if (!q.ok) return err(quotaText('deep', q.left, q.resetLocal), 429);
       const res = await runTrace(ctx, deps.registry, chain, addr, { depth, fetchBudget: 28 });
       await incQuota(ctx, chatId, 'deep');
-      return json({ ok: true, trace: res });
+      // №7 история расследований: сохраняем результат (метаданные всегда, тяжёлая
+      // версия — если влезает в лимит D1-байнда), чтобы открыть граф из «Истории».
+      let traceId = 0;
+      try {
+        const js = JSON.stringify(res);
+        traceId = await ctx.db.saveTrace({
+          root: addr, chain, depth, status: 'done',
+          resultJson: js.length < 900_000 ? js : undefined, chatId, createdTs: ctx.now(),
+        });
+      } catch (e) {
+        await ctx.db.addErrorLog('graph-save', String((e as Error).message));
+      }
+      return json({ ok: true, trace: res, traceId });
+    }
+
+    // ---- trace history (№7): список расследований + открытие сохранённого ----
+    if (path === '/trace-history' && req.method === 'GET') {
+      const traces = await ctx.db.listTraces(chatId, 20);
+      return json({ ok: true, traces: traces.map((t) => ({ id: t.id, root: t.root, chain: t.chain, depth: t.depth, createdTs: t.createdTs })) });
+    }
+    if (path === '/trace' && req.method === 'GET') {
+      const id = parseInt(url.searchParams.get('id') ?? '0', 10) || 0;
+      const t = id ? await ctx.db.getTrace(id) : null;
+      if (!t || t.chatId !== chatId || !t.resultJson) return err('расследование не найдено', 404);
+      return json({ ok: true, trace: JSON.parse(t.resultJson), traceId: t.id, createdTs: t.createdTs });
     }
 
     // ---- photo card upload (spec §17 pipeline A: client-canvas -> worker -> sendPhoto) ----
@@ -118,10 +149,23 @@ export async function handleApi(req: Request, deps: ApiDeps, url: URL): Promise<
 
     // ---- watch ----
     if (path === '/watch' && req.method === 'POST') {
-      const body = await req.json().catch(() => null) as { addr?: string; chain?: string } | null;
+      const body = await req.json().catch(() => null) as { addr?: string; chain?: string; minUsd?: number } | null;
       if (!body?.addr) return err('нет addr');
-      const w = await addWatch(ctx, chatId, body.chain ?? 'tron', body.addr, (await getSettings(ctx, chatId)).minAlertUsd);
+      // №10 пороговые алерты: порог можно задать персонально для адреса
+      // (по умолчанию — глобальный из настроек).
+      const personal = typeof body.minUsd === 'number' && isFinite(body.minUsd) && body.minUsd >= 0 ? body.minUsd : undefined;
+      const w = await addWatch(ctx, chatId, body.chain ?? 'tron', body.addr, personal ?? (await getSettings(ctx, chatId)).minAlertUsd);
       return json({ ok: true, watch: w });
+    }
+    if (path === '/watch-min' && req.method === 'POST') {
+      const body = await req.json().catch(() => null) as { id?: number; minUsd?: number } | null;
+      const id = body?.id ?? 0;
+      const minUsd = body?.minUsd;
+      if (!id || typeof minUsd !== 'number' || !isFinite(minUsd) || minUsd < 0) return err('нужны id и minUsd ≥ 0');
+      const mine = await ctx.db.listWatches(chatId);
+      if (!mine.some((w) => w.id === id)) return err('адрес не найден в твоём списке', 404);
+      await ctx.db.updateWatchMinUsd(id, minUsd);
+      return json({ ok: true });
     }
     if (path === '/watch' && req.method === 'DELETE') {
       const addr = url.searchParams.get('addr') ?? '';
@@ -161,6 +205,17 @@ export async function handleApi(req: Request, deps: ApiDeps, url: URL): Promise<
     if (path === '/monitor-run' && req.method === 'POST') {
       const r = await monitorCycle(ctx, deps.registry);
       return json({ ok: true, checked: r.checked, alerts: r.alerts.length });
+    }
+
+    // ---- №12 share: публичная ссылка «только чтение» на снимок отчёта (KV, TTL 7 дней) ----
+    if (path === '/share' && req.method === 'POST') {
+      const body = await req.json().catch(() => null) as { report?: WalletReport } | null;
+      if (!body?.report?.chains?.length) return err('нет отчёта');
+      const js = JSON.stringify(body.report);
+      if (js.length > 500_000) return err('отчёт слишком большой для ссылки');
+      const token = crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+      await ctx.kv.put(`share:${token}`, js, 604800);
+      return json({ ok: true, url: `${url.origin}/r/${token}` });
     }
 
     return err('неизвестный эндпоинт', 404);

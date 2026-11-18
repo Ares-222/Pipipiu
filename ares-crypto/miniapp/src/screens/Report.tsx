@@ -4,17 +4,20 @@ import { haptic } from '../tg';
 import { renderCardJpeg } from '../card/card';
 import { makePdf } from '../pdf/makePdf';
 import { makeAmlPdf } from '../pdf/makeAmlPdf';
+import { qrMatrix } from '../lib/qr';
 
-export default function Report({ report, trace, onGraph, notify, onOpenAddr, onRefresh }: {
+export default function Report({ report, trace, onGraph, notify, onOpenAddr, onRefresh, prev }: {
   report: WalletReport;
   trace?: TraceResult | null;
   onGraph: () => void;
   notify: (m: string) => void;
   onOpenAddr: (addr: string) => void;
   onRefresh: () => Promise<WalletReport | null>;
+  prev?: { score: number; ts: number };
 }) {
   const cr = report.chains[0];
   const [openFinding, setOpenFinding] = useState<string | null>(null);
+  const [openAml, setOpenAml] = useState(false);
   const [busy, setBusy] = useState('');
 
   if (!cr) {
@@ -97,6 +100,31 @@ export default function Report({ report, trace, onGraph, notify, onOpenAddr, onR
     notify('⬇ JSON сохранён');
   }
 
+  // №12 share: ссылка «только чтение» на снимок отчёта (воркер кладёт в KV на 7 дней).
+  async function shareLink() {
+    haptic(); setBusy('share');
+    try {
+      const rep = await freshReport();
+      const r = await api<{ url: string }>('/share', { method: 'POST', body: JSON.stringify({ report: rep }) });
+      try { await navigator.clipboard.writeText(r.url); notify('🔗 Ссылка скопирована — живёт 7 дней, без входа в бот'); }
+      catch { notify('🔗 ' + r.url); }
+    } catch (e) { notify('⚠️ ' + (e as Error).message); } finally { setBusy(''); }
+  }
+
+  // №5 «Из чего сложился скоринг»: вклад каждого источника в noisy-OR итог.
+  // вклад_i = итог − итог_без_источника_i (score хита уже включает базу × долю × затухание).
+  const amlContribs = useMemo(() => {
+    const hits = cr.aml?.hits ?? [];
+    const surv = hits.reduce((s, h) => s * (1 - h.score / 100), 1);
+    const withAll = 100 * (1 - surv);
+    return hits
+      .map((h) => {
+        const s2 = hits.reduce((s, x) => (x === h ? s : s * (1 - x.score / 100)), 1);
+        return { source: h.source, severity: h.severity, contrib: Math.max(0, Math.round(withAll - 100 * (1 - s2))) };
+      })
+      .sort((a, b) => b.contrib - a.contrib);
+  }, [cr.aml]);
+
   return (
     <div className="fade-in" style={{ padding: '14px' }}>
       {/* header */}
@@ -124,6 +152,20 @@ export default function Report({ report, trace, onGraph, notify, onOpenAddr, onR
           Баланс: <b>{fmt(cr.account.balanceNative)}</b> {cr.chain === 'tron' ? 'TRX' : cr.chain === 'ton' ? 'TON' : cr.chain === 'btc' ? 'BTC' : cr.chain === 'sol' ? 'SOL' : cr.chain === 'bsc' ? 'BNB' : cr.chain === 'polygon' ? 'POL' : 'ETH'}
         </div>
       </div>
+
+      {/* №14 diff повторной проверки */}
+      {prev && (
+        <div className="card2" style={{ marginBottom: 10, borderColor: 'rgba(59,130,246,.4)' }}>
+          <div style={{ fontSize: 12 }}>🕘 Прошлая проверка этого адреса: <b className="mono">{prev.score}/100</b> · {new Date(prev.ts * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
+          <div style={{ fontSize: 11.5, marginTop: 3, color: report.verdict.score > prev.score ? 'var(--warn)' : report.verdict.score < prev.score ? 'var(--ok)' : 'var(--muted)' }}>
+            {report.verdict.score === prev.score
+              ? 'Оценка не изменилась с прошлого раза.'
+              : report.verdict.score > prev.score
+                ? `Риск вырос на +${report.verdict.score - prev.score}: проверь «Признаки риска» и AML-источники ниже.`
+                : `Риск снизился на −${prev.score - report.verdict.score}: профиль улучшился.`}
+          </div>
+        </div>
+      )}
 
       {/* KPI row */}
       {k && (
@@ -220,6 +262,26 @@ export default function Report({ report, trace, onGraph, notify, onOpenAddr, onR
                 {h.path && <div className="mono" style={{ color: 'var(--muted)', fontSize: 11, marginTop: 2 }}>{h.path.map((p) => short(p, 6, 4)).join(' → ')}</div>}
               </div>
             ))}
+
+            {/* №5 «из чего сложился» — вклады источников в итоговую цифру */}
+            {cr.aml.hits.length > 0 && (
+              <button className="btn btn-ghost" style={{ marginTop: 8, fontSize: 12 }} onClick={() => { haptic(); setOpenAml(!openAml); }}>
+                {openAml ? '▲ Скрыть разбор' : '▼ Из чего сложился скоринг'}
+              </button>
+            )}
+            {openAml && cr.aml.hits.length > 0 && (
+              <div style={{ marginTop: 8, borderTop: '1px dashed var(--border)', paddingTop: 8 }}>
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 6, lineHeight: 1.5 }}>
+                  Итог — шумное «ИЛИ» по источникам: 100 × (1 − Π(1 − score/100)). «+N» — сколько источник добавил к итогу: убери его и увидишь, на сколько упала бы цифра.
+                </div>
+                {amlContribs.map((c, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', fontSize: 12 }}>
+                    <span>{c.source} <span className="badge">{c.severity}</span></span>
+                    <span className="mono" style={{ color: c.contrib >= 10 ? 'var(--danger)' : 'var(--muted)' }}>+{c.contrib}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {cr.aml.exchangeExit.length > 0 && (
               <div style={{ fontSize: 12, marginTop: 6 }}>
                 🏦 KYC-деанонимизация: {cr.aml.exchangeExit.slice(0, 3).map((e) => e.label).join(', ')}
@@ -302,8 +364,29 @@ export default function Report({ report, trace, onGraph, notify, onOpenAddr, onR
         <button className="btn" onClick={watch} disabled={busy === 'watch'}>{busy === 'watch' ? '…' : '🔔 Следить'}</button>
         <button className="btn" onClick={pdf} disabled={busy === 'pdf'}>{busy === 'pdf' ? '…' : '📄 PDF'}</button>
         <button className="btn" style={{ gridColumn: '1 / -1' }} onClick={amlPdf} disabled={busy === 'amlpdf'}>{busy === 'amlpdf' ? '⏳ Собираю досье…' : '🛡 AML-отчёт (PDF в чат)'}</button>
+        <button className="btn" style={{ gridColumn: '1 / -1' }} onClick={shareLink} disabled={busy === 'share'}>{busy === 'share' ? '…' : '🔗 Ссылка для контрагента (только чтение)'}</button>
         <button className="btn btn-ghost" style={{ gridColumn: '1 / -1' }} onClick={exportJson}>⬇ Экспорт JSON</button>
       </div>
+
+      {/* №13 QR: адрес — сканером, без копирования (защита от подмены буфера обмена) */}
+      {(() => {
+        const q = qrMatrix(addr);
+        if (!q) return null;
+        const cell = 100 / q.size;
+        return (
+          <div className="card" style={{ marginTop: 6, display: 'flex', gap: 12, alignItems: 'center' }}>
+            <svg viewBox="0 0 100 100" style={{ width: 92, height: 92, flex: 'none', background: '#fff', borderRadius: 8 }} shapeRendering="crispEdges">
+              {q.dark.flatMap((row, r) => row.map((d, c) => (d ? <rect key={`${r}-${c}`} x={c * cell} y={r * cell} width={cell} height={cell} fill="#0A0A0B" /> : null)))}
+            </svg>
+            <div style={{ flex: 1 }}>
+              <div className="microlabel">QR · проверка адреса</div>
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
+                Контрагент сканирует камерой — адрес подставляется сам, без копирования. Это защита от скам-подмены буфера обмена.
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div style={{ color: 'var(--muted)', fontSize: 11, textAlign: 'center', marginTop: 8 }}>
         Ares Crypto-Analytics · данные: публичные блокчейны · вероятностные оценки

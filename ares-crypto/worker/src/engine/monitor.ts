@@ -116,3 +116,42 @@ export async function addWatch(ctx: AppCtx, chatId: number, chain: string, addr:
   const w = await ctx.db.addWatch({ chatId, chain, addr, active: true, minUsd });
   return w;
 }
+
+// №11 Ежедневная сводка (cron 0 7 * * *): по каждому пользователю с активными
+// адресами — что изменилось за сутки (события уже в watch_events). Тишина, если
+// событий нет: сводка не должна превращаться в спам.
+export async function digestDaily(ctx: AppCtx, send: (chatId: number, text: string) => Promise<void>): Promise<number> {
+  const all = (await ctx.db.listWatches()).filter((w) => w.active);
+  if (!all.length) return 0;
+  const byChat = new Map<number, typeof all>();
+  for (const w of all) {
+    const arr = byChat.get(w.chatId) ?? [];
+    arr.push(w);
+    byChat.set(w.chatId, arr);
+  }
+  const since = ctx.now() - 86400;
+  let sent = 0;
+  for (const [chatId, watches] of byChat) {
+    const events = await ctx.db.listWatchEvents(watches.map((w) => w.id), 50, since);
+    if (!events.length) continue;
+    const inEv = events.filter((e) => e.direction === 'in');
+    const outEv = events.filter((e) => e.direction === 'out');
+    const lines: string[] = ['📋 <b>Сводка за 24 часа</b>', ''];
+    lines.push(`Адресов под наблюдением: <b>${watches.length}</b> · событий: <b>${events.length}</b> (▼ входящих ${inEv.length} · ▲ исходящих ${outEv.length})`);
+    const biggest = [...events].sort((a, b) => b.amount - a.amount).slice(0, 5);
+    if (biggest.length) lines.push('', '<b>Крупнейшие движения:</b>');
+    for (const e of biggest) {
+      const dir = e.direction === 'in' ? '▼ вход' : '▲ вывод';
+      const cp = e.counterparty ? `${shortAddr(e.counterparty)}${e.label ? ` (${e.label})` : ''}` : '';
+      lines.push(`${dir} · <b>${e.amount} ${e.asset}</b> ${cp ? `· ${cp}` : ''}`);
+    }
+    lines.push('', 'Подробности — «🔔 Мониторинг» в мини-аппе.');
+    await send(chatId, lines.join('\n'));
+    sent++;
+  }
+  return sent;
+}
+
+function shortAddr(a: string): string {
+  return a && a.length > 14 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
+}

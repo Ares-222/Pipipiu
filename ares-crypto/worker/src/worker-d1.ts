@@ -180,12 +180,16 @@ export class D1DB implements DBLike {
     );
     for (let i = 0; i < stmts.length; i += 50) await this.d1.batch(stmts.slice(i, i + 50));
   }
-  async listWatchEvents(watchIds: number[], limit: number): Promise<WatchEventRow[]> {
+  async listWatchEvents(watchIds: number[], limit: number, sinceTs?: number): Promise<WatchEventRow[]> {
     if (!watchIds.length) return [];
     const ph = watchIds.map(() => '?').join(',');
-    const res = await this.d1.prepare(
-      `SELECT * FROM watch_events WHERE watch_id IN (${ph}) ORDER BY ts DESC LIMIT ?`,
-    ).bind(...watchIds, limit).all<DbEvent>();
+    const res = sinceTs !== undefined
+      ? await this.d1.prepare(
+        `SELECT * FROM watch_events WHERE watch_id IN (${ph}) AND ts >= ? ORDER BY ts DESC LIMIT ?`,
+      ).bind(...watchIds, sinceTs, limit).all<DbEvent>()
+      : await this.d1.prepare(
+        `SELECT * FROM watch_events WHERE watch_id IN (${ph}) ORDER BY ts DESC LIMIT ?`,
+      ).bind(...watchIds, limit).all<DbEvent>();
     return (res.results ?? []).map((r) => ({
       id: r.id, watchId: r.watch_id, direction: r.direction as 'in' | 'out', amount: r.amount, asset: r.asset,
       counterparty: r.counterparty ?? '', label: r.label ?? undefined, txHash: r.tx_hash ?? '', ts: r.ts, notified: r.notified === 1,
@@ -195,6 +199,9 @@ export class D1DB implements DBLike {
     for (const id of ids) {
       await this.d1.prepare(`UPDATE watch_events SET notified = 1 WHERE id = ?`).bind(id).run();
     }
+  }
+  async updateWatchMinUsd(id: number, minUsd: number): Promise<void> {
+    await this.d1.prepare(`UPDATE watches SET min_usd = ? WHERE id = ?`).bind(minUsd, id).run();
   }
 
   // ---------- traces ----------
@@ -216,6 +223,16 @@ export class D1DB implements DBLike {
     if (patch.status !== undefined) await this.d1.prepare(`UPDATE traces SET status = ? WHERE id = ?`).bind(patch.status, id).run();
     if (patch.stateJson !== undefined) await this.d1.prepare(`UPDATE traces SET state_json = ? WHERE id = ?`).bind(patch.stateJson, id).run();
     if (patch.resultJson !== undefined) await this.d1.prepare(`UPDATE traces SET result_json = ? WHERE id = ?`).bind(patch.resultJson, id).run();
+  }
+  async listTraces(chatId: number, limit: number): Promise<TraceRow[]> {
+    const res = await this.d1.prepare(
+      `SELECT id, root, chain, depth, status, chat_id, created_at FROM traces
+       WHERE chat_id = ? AND status = 'done' AND result_json IS NOT NULL ORDER BY created_at DESC LIMIT ?`,
+    ).bind(chatId, limit).all<DbTrace>();
+    return (res.results ?? []).map((r) => ({
+      id: r.id, root: r.root, chain: r.chain, depth: r.depth, status: r.status,
+      chatId: r.chat_id ?? 0, createdTs: r.created_at,
+    }));
   }
 
   // ---------- users ----------
@@ -246,6 +263,15 @@ export class D1DB implements DBLike {
       id: r.id, chatId: r.chat_id, input: r.input, chain: r.chain, verdict: r.verdict,
       summaryJson: r.summary_json ?? undefined, createdTs: r.created_at,
     }));
+  }
+  async lastCheckForInput(chatId: number, input: string): Promise<CheckRow | null> {
+    const r = await this.d1.prepare(
+      `SELECT * FROM checks WHERE chat_id = ? AND input = ? ORDER BY created_at DESC LIMIT 1`,
+    ).bind(chatId, input).first<DbCheck>();
+    return r ? {
+      id: r.id, chatId: r.chat_id, input: r.input, chain: r.chain, verdict: r.verdict,
+      summaryJson: r.summary_json ?? undefined, createdTs: r.created_at,
+    } : null;
   }
 
   // ---------- error log ----------

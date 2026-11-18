@@ -9,8 +9,9 @@ import TraceLoading from './screens/TraceLoading';
 import Monitor from './screens/Monitor';
 import History from './screens/History';
 import Settings from './screens/Settings';
+import Glossary from './screens/Glossary';
 
-type Screen = 'home' | 'report' | 'graph' | 'monitor' | 'history' | 'settings' | 'aml';
+type Screen = 'home' | 'report' | 'graph' | 'monitor' | 'history' | 'settings' | 'aml' | 'glossary';
 
 // Deep link из кнопок бота. Telegram кладёт startapp в initDataUnsafe.start_param
 // только для прямых ссылок; у inline web_app-кнопок параметр остаётся в URL страницы.
@@ -30,6 +31,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
   const [traceLoading, setTraceLoading] = useState(false);
+  const [prevCheck, setPrevCheck] = useState<{ score: number; ts: number } | undefined>(undefined);
   const cancelTraceRef = useRef(false);
   const lastSearchRef = useRef<string>('');
 
@@ -40,8 +42,9 @@ export default function App() {
     lastSearchRef.current = input.trim();
     setLoading(true); setError('');
     try {
-      const r = await api<{ report: WalletReport }>(`/report?addr=${encodeURIComponent(input)}`);
+      const r = await api<{ report: WalletReport; prev?: { score: number; ts: number } }>(`/report?addr=${encodeURIComponent(input)}`);
       setReport(r.report);
+      setPrevCheck(r.prev);
       setTrace(null);
       setScreen('report');
     } catch (e) {
@@ -196,6 +199,7 @@ export default function App() {
               notify={notify}
               onOpenAddr={(addr) => void doSearch(addr)}
               onRefresh={refreshReport}
+              prev={prevCheck}
             />
           )}
           {screen === 'graph' && (trace || report) && (
@@ -248,8 +252,9 @@ export default function App() {
             </div>
           )}
           {screen === 'monitor' && <Monitor onOpenAddr={doSearch} />}
-          {screen === 'history' && <History onOpenAddr={doSearch} />}
-          {screen === 'settings' && <Settings notify={notify} />}
+          {screen === 'history' && <History onOpenAddr={doSearch} onOpenTrace={(t) => { setTrace(t); setScreen('graph'); }} />}
+          {screen === 'settings' && <Settings notify={notify} onNav={(s) => setScreen(s)} />}
+          {screen === 'glossary' && <Glossary />}
         </>
       )}
 
