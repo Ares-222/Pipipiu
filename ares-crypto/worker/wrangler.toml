@@ -35,4 +35,4 @@ OPENROUTER_MODEL = "baidu/ernie-5.5-flash-preview:free"                  # пр�
 [assets]
 directory = "../miniapp/dist"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/tg-webhook", "/healthz"]
+run_worker_first = ["/api/*", "/tg-webhook", "/healthz", "/r/*"]   # share-страницы через воркер, не SPA-fallback
