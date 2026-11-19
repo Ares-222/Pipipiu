@@ -69,6 +69,7 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
   const [minEdge, setMinEdge] = useState(0);
   const [showLabels, setShowLabels] = useState(true);
   const [photoBusy, setPhotoBusy] = useState('');
+  const [showDemoUnmix, setShowDemoUnmix] = useState(false);
 
   // v7 (№16/№17): фото расследования и потока средств в чат — рендер в клиенте,
   // воркер только релеит JPEG в sendPhoto. Красиво и наглядно, без скриншота webview.
@@ -418,14 +419,40 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
         </>
       )}
 
-      {/* Unmix: «человекочитаемое» распутывание миксеров — утверждённый визуал 18.11 (вердикт + истории связей) */}
-      {unmix.length > 0 && (
-        <>
-          <div className="microlabel" style={{ margin: '16px 4px 6px' }}>Unmix · распутывание миксеров · {unmix.length}</div>
-          {unmix.map((u, i) => (
-            <UnmixStory key={i} u={u} chain={trace?.chain ?? ''} onOpenAddr={onOpenAddr} />
-          ))}
-        </>
+      {/* Unmix: «человекочитаемое» распутывание миксеров — утверждённый визуал 18.11
+          (вердикт + истории связей). v7.1: секция ВСЕГДА видна — честный пустой слот
+          с объяснением, почему блока нет, и предпросмотр на вымышленных данных. */}
+      <div className="microlabel" style={{ margin: '16px 4px 6px' }}>
+        Unmix · распутывание миксеров{unmix.length ? ` · ${unmix.length}` : ''}
+      </div>
+      {unmix.length > 0 && unmix.map((u, i) => (
+        <UnmixStory key={i} u={u} chain={trace?.chain ?? ''} onOpenAddr={onOpenAddr} />
+      ))}
+      {unmix.length === 0 && (
+        <div className="card2" style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--warn)' }}>🌀 Следов миксера (Tornado Cash) в графе не найдено</div>
+          <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 5, lineHeight: 1.5 }}>
+            Блок с историями связей появляется здесь и в PDF только когда адрес или его
+            окружение вносили/выводили средства через миксер, а индекс депозитов покрывает
+            этот период. Индекс собирается для Ethereum · BSC · Polygon; для TRON/TON/BTC/SOL
+            распутывание миксеров не применимо — там работают пил-чейн, AML-экспозиция и мультичейн.
+          </div>
+          <button
+            className="btn"
+            style={{ marginTop: 8, fontSize: 12 }}
+            onClick={() => { haptic(); setShowDemoUnmix(!showDemoUnmix); }}
+          >
+            {showDemoUnmix ? 'Скрыть пример' : '👁 Показать, как выглядит блок'}
+          </button>
+        </div>
+      )}
+      {showDemoUnmix && unmix.length === 0 && (
+        <div>
+          <div style={{ fontSize: 11, color: 'var(--warn)', margin: '0 4px 6px' }}>
+            ⚠️ ПРИМЕР ДАННЫХ · адреса и суммы вымышленные — это демонстрация визуала, не твоё расследование
+          </div>
+          <UnmixStory u={DEMO_UNMIX} chain="eth" onOpenAddr={() => notify('Это пример данных — адреса вымышленные, переход отключён')} />
+        </div>
       )}
 
       {trace?.leaks && trace.leaks.length > 0 && (
@@ -514,6 +541,35 @@ function umLat(ms?: number, mw?: number): string {
   const m = Math.round((mw - ms) / 60);
   return m < 60 ? `${m} мин` : `${Math.floor(m / 60)} ч ${m % 60} мин`;
 }
+
+// Демо-объект для кнопки «👁 Показать, как выглядит блок»: точная копия утверждённого
+// заказчиком макета от 18.11 (95/75/35/14 · сходимость ~68% · цикл ↻). Адреса
+// 0xAAAA…/0xBBBB… — вымышленные, над блоком рисуется явная плашка «ПРИМЕР ДАННЫХ».
+const DEMO_DAY = Date.UTC(2026, 10, 18); // 2026-11-18 00:00 UTC
+const min = (h: number, m: number) => DEMO_DAY + h * 3600e3 + m * 60e3;
+const DEMO_UNMIX: UnmixFinding = {
+  mixer: '0x47ce0c6ed5b0ce3d3a51fdb1c52dc66a7c3c2936',
+  mixerLabel: 'Tornado Cash · пример',
+  deposits: [
+    { addr: '0xAAAA111111111111111111111111111111111111', amount: 1, ts: Math.floor(min(4, 12) / 1000) },
+    { addr: '0xBBBB222222222222222222222222222222222222', amount: 1, ts: Math.floor(min(4, 15) / 1000) },
+    { addr: '0xCCCC333333333333333333333333333333333333', amount: 1, ts: Math.floor(min(4, 31) / 1000) },
+    { addr: '0xDDDD444444444444444444444444444444444444', amount: 1, ts: Math.floor(min(5, 2) / 1000) },
+  ],
+  outputs: [
+    { addr: '0xAAAA111111111111111111111111111111111111', amount: 1, ts: Math.floor(min(4, 58) / 1000) },
+    { addr: '0xEEEE555555555555555555555555555555555555', amount: 1, ts: Math.floor(min(5, 26) / 1000) },
+    { addr: '0xFFFF666666666666666666666666666666666666', amount: 1, ts: Math.floor(min(7, 43) / 1000) },
+    { addr: '0x7777111111111111111111111111111111111111', amount: 1, ts: Math.floor(min(7, 50) / 1000) },
+  ],
+  links: [
+    { from: '0xAAAA111111111111111111111111111111111111', to: '0xAAAA111111111111111111111111111111111111', amount: 1, p: 0.95, method: 'H1', looped: true },
+    { from: '0xBBBB222222222222222222222222222222222222', to: '0xEEEE555555555555555555555555555555555555', amount: 1, p: 0.75, method: 'H2' },
+    { from: '0xCCCC333333333333333333333333333333333333', to: '0xFFFF666666666666666666666666666666666666', amount: 1, p: 0.35, method: 'H3' },
+    { from: '0xDDDD444444444444444444444444444444444444', to: '0x7777111111111111111111111111111111111111', amount: 1, p: 0.14, method: '1/n' },
+  ],
+  note: 'Номинал 1 ETH · сходимость ~68% · циклов повторного входа: 1',
+};
 function UnmixStory({ u, chain, onOpenAddr }: { u: UnmixFinding; chain: string; onOpenAddr: (a: string) => void }) {
   const rec = Number((u.note.match(/сходимость ~(\d+)%/) ?? [])[1] ?? NaN);
   const loops = Number((u.note.match(/циклов повторного входа: (\d+)/) ?? [])[1] ?? 0);

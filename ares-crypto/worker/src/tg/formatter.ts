@@ -262,6 +262,9 @@ export function renderTraceResult(res: TraceResult): string[] {
       for (const l of u.links.slice(0, 4)) push(`· вероятный вывод: <code>${esc(shortAddr(l.to, 6, 4))}</code> ${fmtAmount(l.amount)} — <b>p≈${fmtPct(l.p)}</b>\n`);
       push(`<i>${esc(u.note)}</i>\n`);
     }
+    push(`Полные истории связей — в мини-аппе: Расследование, блок «Unmix» (и в PDF).\n`);
+  } else {
+    push(`\n🌀 Миксеров (Tornado Cash) в окружении не найдено — в мини-аппе на экране «Расследование» блок Unmix честно пустой, там есть кнопка «👁 Показать, как выглядит блок». Индекс работает для ETH · BSC · Polygon.\n`);
   }
   if (res.truncated) push(`\n⚠️ Остановился по бюджету запросов — кнопка «продолжить глубже» достроит граф.\n`);
   push(`\n<i>${DISCLAIMER}</i>`);
