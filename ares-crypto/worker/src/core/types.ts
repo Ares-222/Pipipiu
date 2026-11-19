@@ -246,6 +246,17 @@ export interface AmlResult {
   disclaimer: string;
 }
 
+// v7: отпечаток активности (№9) — распределение переводов по часам суток UTC.
+export interface ActivityFingerprint {
+  hist: number[];
+  total: number;
+  peakFrom: number;
+  peakTo: number;
+  peakShare: number;
+  dayActiveShare: number;
+  note: string;
+}
+
 export interface ChainReport {
   chain: ChainId;
   account: Account;
@@ -256,6 +267,7 @@ export interface ChainReport {
   transit?: TransitInfo;
   aml?: AmlResult;
   telegram?: TelegramOsint;   // TON only
+  activity?: ActivityFingerprint; // v7: отпечаток активности по часам UTC
   partial?: boolean;
   providers?: string[];
 }
@@ -291,6 +303,8 @@ export interface GraphNode {
   isRoot?: boolean;
   role?: string;            // cex/mixer/personal/...
   probable?: boolean;       // структурная эвристика («хаб»), не метка провайдера
+  peel?: boolean;           // узел пил-чейна (v7, эвристика «раздевания»)
+  assoc?: boolean;          // узел с общим источником финансирования с другим узлом (v7)
 }
 
 export interface GraphEdge {
@@ -315,6 +329,13 @@ export interface UnmixFinding {
   note: string;
 }
 
+// v7: структурная картина расследования (не «веер вылетов», а распутанные цепочки).
+export interface TraceStructure {
+  peel: { addrs: string[]; amounts: number[]; asset: string; shareKept: number }[];
+  funders: { source: string; sourceLabel?: string; targets: string[] }[];
+  bridges: string[];        // метки мостовых узлов в графе
+}
+
 export interface TraceResult {
   root: string;
   chain: string;
@@ -323,6 +344,7 @@ export interface TraceResult {
   edges: GraphEdge[];
   leaks: { addr: string; label?: string; category?: string; probable?: boolean; amount: number; asset: string; share: number }[];
   findings: string[];
+  structure?: TraceStructure;   // v7: пил-чейны, общие источники, мосты
   unmix?: UnmixFinding[];
   truncated?: boolean;
   providersUsed: string[];

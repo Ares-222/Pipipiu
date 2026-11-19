@@ -34,6 +34,7 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [traceLoading, setTraceLoading] = useState(false);
   const [prevCheck, setPrevCheck] = useState<{ score: number; ts: number } | undefined>(undefined);
+  const [cached, setCached] = useState(false);
   const cancelTraceRef = useRef(false);
   const lastSearchRef = useRef<string>('');
 
@@ -44,9 +45,10 @@ export default function App() {
     lastSearchRef.current = input.trim();
     setLoading(true); setError('');
     try {
-      const r = await api<{ report: WalletReport; prev?: { score: number; ts: number } }>(`/report?addr=${encodeURIComponent(input)}`);
+      const r = await api<{ report: WalletReport; prev?: { score: number; ts: number }; cached?: boolean }>(`/report?addr=${encodeURIComponent(input)}`);
       setReport(r.report);
       setPrevCheck(r.prev);
+      setCached(!!r.cached);
       setTrace(null);
       setScreen('report');
     } catch (e) {
@@ -60,8 +62,9 @@ export default function App() {
     const cur = report;
     if (!cur) return null;
     const addr = cur.chains[0]?.account.addr ?? cur.input;
-    const r = await api<{ report: WalletReport }>(`/report?addr=${encodeURIComponent(addr)}`);
+    const r = await api<{ report: WalletReport }>(`/report?addr=${encodeURIComponent(addr)}&force=1`);
     setReport(r.report);
+    setCached(false);
     return r.report;
   }
 
@@ -202,12 +205,14 @@ export default function App() {
               onOpenAddr={(addr) => void doSearch(addr)}
               onRefresh={refreshReport}
               prev={prevCheck}
+              cached={cached}
             />
           )}
           {screen === 'graph' && (trace || report) && (
             <Graph
               report={report}
               trace={trace}
+              notify={notify}
               onOpenAddr={(addr) => void doSearch(addr)}
             />
           )}

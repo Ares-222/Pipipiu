@@ -11,6 +11,7 @@ import { buildProfile } from '../engine/profile.ts';
 import { LabelEngine } from '../engine/labels.ts';
 import { scoreAml, combineVerdict } from '../engine/aml.ts';
 import { telegramLinks, resolveTelegram, resolveTonDomain } from '../engine/tonosint.ts';
+import { activityFingerprint, dustFinding } from '../engine/insights.ts';
 
 export interface ReportOpts {
   txLimit?: number;       // default 200 moves per chain
@@ -172,6 +173,15 @@ export async function buildWalletReport(
       const aml = await scoreAml(ctx, { chain: cr.chain, addr: addr!, txs: cr.txs, now, priceOf });
       cr.aml = aml;
       for (const h of aml.hits.slice(0, 2)) verdictReasons.push(`${h.source} (${h.hops === 0 ? 'прямой' : `${h.hops} хоп`})`);
+    }
+
+    // v7 (№9, №12): отпечаток активности и детект пылевых атак — считаются из
+    // уже собранных txs, ноль дополнительных fetch. Попадают в карточку и PDF.
+    cr.activity = activityFingerprint(cr.txs) ?? undefined;
+    const dust = dustFinding(cr.txs, priceOf);
+    if (dust) {
+      cr.findings.push(dust);
+      verdictReasons.push(dust.title);
     }
   }
 

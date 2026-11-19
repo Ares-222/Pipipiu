@@ -44,13 +44,14 @@ export interface ChainReport {
   chain: string; account: Account; txs: Tx[]; kpi?: Kpi; findings: Finding[];
   classification?: Classification; transit?: TransitInfo; aml?: AmlResult;
   telegram?: TelegramOsint; partial?: boolean; providers?: string[];
+  activity?: ActivityFingerprint; // v7 №9: отпечаток активности по часам UTC
 }
 export interface WalletReport {
   input: string; createdAt: number; chains: ChainReport[];
   verdict: { score: number; level: string; reasons: string[] };
   warnings: string[];
 }
-export interface GraphNode { id: string; chain: string; addr: string; label?: string; category?: string; volume: number; in: number; out: number; txCount: number; isRoot?: boolean; role?: string; probable?: boolean; }
+export interface GraphNode { id: string; chain: string; addr: string; label?: string; category?: string; volume: number; in: number; out: number; txCount: number; isRoot?: boolean; role?: string; probable?: boolean; peel?: boolean; assoc?: boolean; }
 export interface GraphEdge { from: string; to: string; amount: number; asset: string; txCount: number; firstTs: number; lastTs: number; probable?: boolean; p?: number; via?: string; }
 export interface TraceResultLeak { addr: string; label?: string; category?: string; probable?: boolean; amount: number; asset: string; share: number; }
 // Зеркало UnmixFinding из worker/src/core/types.ts (spec §11.4 + v6): скоринг
@@ -62,7 +63,61 @@ export interface UnmixFinding {
   links: { from: string; to: string; amount: number; p: number; method?: string; looped?: boolean }[];
   note: string;
 }
-export interface TraceResult { root: string; chain: string; depth: number; nodes: GraphNode[]; edges: GraphEdge[]; leaks: TraceResultLeak[]; findings: string[]; unmix?: UnmixFinding[]; truncated?: boolean; fetchesUsed: number; }
+// v7: структурная картина расследования — пил-чейны, общие источники, мосты.
+export interface TraceStructure {
+  peel: { addrs: string[]; amounts: number[]; asset: string; shareKept: number }[];
+  funders: { source: string; sourceLabel?: string; targets: string[] }[];
+  bridges: string[];
+}
+export interface TraceResult { root: string; chain: string; depth: number; nodes: GraphNode[]; edges: GraphEdge[]; leaks: TraceResultLeak[]; findings: string[]; structure?: TraceStructure; unmix?: UnmixFinding[]; truncated?: boolean; fetchesUsed: number; }
+// v7 №9: гистограмма активности по часам UTC + человекочитаемый вывод движка.
+export interface ActivityFingerprint {
+  hist: number[]; total: number; peakFrom: number; peakTo: number;
+  peakShare: number; dayActiveShare: number; note: string;
+}
+// v7 №8: строка мультичейн-сводки EVM-адреса.
+export interface MultiChainRow { chain: string; balance?: number; isContract?: boolean; provider?: string; partial?: boolean; error?: string; }
+
+// ---------- общие визуальные константы графа (экран + фото в чат) ----------
+
+export const CAT_COLORS: Record<string, string> = {
+  cex: '#3B82F6', tgbots: '#EC4899', service: '#2DD4BF', payment: '#F59E0B', bridge: '#8B5CF6',
+  mixer: '#D40000', scam: '#FF4D6D', sanctioned: '#E5E7EB', contract: '#6B7280',
+  token: '#10B981', personal: '#9CA3AF',
+};
+export const DANGER_CATS = new Set(['mixer', 'scam', 'sanctioned']);
+
+export type GraphVerdict = { tone: 'bad' | 'warn' | 'ok'; icon: string; title: string; detail: string };
+
+export function computeGraphVerdict(nodes: GraphNode[], leaks: TraceResultLeak[]): GraphVerdict {
+  const dangerLeaks = leaks.filter((l) => DANGER_CATS.has(l.category ?? ''));
+  const dangerShare = dangerLeaks.reduce((s, l) => s + l.share, 0);
+  const cnt = (c: string) => nodes.filter((n) => !n.isRoot && n.category === c).length;
+  const mixerCnt = cnt('mixer'), scamCnt = cnt('scam'), sancCnt = cnt('sanctioned');
+  const dangerCnt = mixerCnt + scamCnt + sancCnt;
+
+  if (dangerShare > 0.02) {
+    const names = [...new Set(dangerLeaks.map((l) => categoryRuFull(l.category, l.probable)))].join(', ');
+    return {
+      tone: 'bad', icon: '🚨', title: `Высокий риск: ~${Math.round(dangerShare * 100)}% исходящих уходит в рисковые точки`,
+      detail: `${names}. Это прямые переводы от целевого кошелька — самые надёжные сигналы.`,
+    };
+  }
+  if (dangerCnt > 0) {
+    const parts: string[] = [];
+    if (mixerCnt) parts.push(`миксеров ${mixerCnt}`);
+    if (scamCnt) parts.push(`скам-адресов ${scamCnt}`);
+    if (sancCnt) parts.push(`санкционных ${sancCnt}`);
+    return {
+      tone: 'warn', icon: '⚠️', title: 'В графе есть рисковые узлы',
+      detail: `${parts.join(' · ')}. Прямые исходящие платежи целевого кошелька — на нейтральные адреса, но рисковые точки в его окружении.`,
+    };
+  }
+  return {
+    tone: 'ok', icon: '✅', title: 'Рисковых конечных точек не найдено',
+    detail: 'Среди прямых исходящих нет миксеров, скам- и санкционных адресов. Это не гарантия чистоты — смотрите AML-скоринг в отчёте.',
+  };
+}
 
 export const CATEGORY_RU: Record<string, string> = {
   cex: 'Биржа', payment: 'Платёжный сервис', mixer: 'Миксер', bridge: 'Мост',

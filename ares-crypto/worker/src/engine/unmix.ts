@@ -11,7 +11,7 @@
 
 import { normAddr } from '../core/types.ts';
 import { fmtAmount } from '../core/util.ts';
-import type { MixerDepositRow } from './db.ts';
+import type { MixerDepositRow } from '../core/db.ts';
 import type { UnmixFinding } from '../core/types.ts';
 
 export interface UnmixEdge { from: string; to: string; amount: number; asset: string; }

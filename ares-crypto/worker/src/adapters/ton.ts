@@ -112,6 +112,19 @@ interface TonapiEvents {
         comment?: string;
         jetton?: { address: string; name?: string; symbol?: string; decimals: number };
       };
+      // v7 (№3): своп через DEX (ston.fi / DeDust / …). В action приходит маршрут
+      // с именем DEX и адресом роутера — он и становится контрагентом-«сервисом».
+      JettonSwap?: {
+        dex?: string;
+        router?: { address?: string };
+        routes?: { path?: { jetton?: { symbol?: string; name?: string } }[] }[];
+        sender?: { address?: string };
+        receiver?: { address?: string };
+        amount_in?: string;
+        amount_out?: string;
+        in_jetton?: { symbol?: string; decimals?: number };
+        out_jetton?: { symbol?: string; decimals?: number };
+      };
       simple_preview?: { action_type?: string };
     }[];
   }[];
@@ -245,6 +258,30 @@ export class TonAdapter implements ChainAdapter {
               memo: j.comment,
             });
           }
+          // v7 (№3): DEX-своп — контрагент = роутер, «куда ушло» честно показывает
+          // не личный кошелёк, а сервис обмена (ston.fi / DeDust / …).
+          const sw = act.JettonSwap;
+          if (sw && (isParty(sw.sender?.address, addrRaw, addr) || isParty(sw.receiver?.address, addrRaw, addr))) {
+            const isIn = isParty(sw.receiver?.address, addrRaw, addr) && !isParty(sw.sender?.address, addrRaw, addr);
+            const isInOutBoth = isParty(sw.sender?.address, addrRaw, addr) && isParty(sw.receiver?.address, addrRaw, addr);
+            const inSym = sw.in_jetton?.symbol ?? sw.routes?.[0]?.path?.[0]?.jetton?.symbol ?? 'JETTON';
+            const outSym = sw.out_jetton?.symbol ?? 'TON';
+            const inDec = sw.in_jetton?.decimals ?? 9;
+            txs.push({
+              hash: ev.event_id,
+              chain: 'ton',
+              ts,
+              from: tonRawToFriendly(sw.sender?.address ?? '') ?? (sw.sender?.address ?? ''),
+              to: tonRawToFriendly(sw.router?.address ?? '') ?? (sw.router?.address ?? sw.dex ?? 'DEX'),
+              amount: toNum(sw.amount_in) / 10 ** inDec,
+              asset: inSym,
+              contract: sw.router?.address,
+              fee: 0,
+              direction: isInOutBoth ? 'self' : isIn ? 'in' : 'out',
+              kind: 'tx',
+              memo: `swap ${sw.dex ?? 'DEX'}: ${inSym} → ${outSym}`,
+            });
+          }
         }
       }
     } catch {
@@ -339,6 +376,14 @@ export class TonAdapter implements ChainAdapter {
     }
     return response.result;
   }
+}
+
+// v7: сравнение адреса в raw/friendly формах (sender/receiver приходят в raw).
+function isParty(a: string | undefined, addrRaw: string, addrFriendly: string): boolean {
+  if (!a) return false;
+  if (a === addrRaw || a === addrFriendly) return true;
+  const f = tonRawToFriendly(a);
+  return f === addrFriendly || f === addrRaw;
 }
 
 function errorText(e: unknown): string {

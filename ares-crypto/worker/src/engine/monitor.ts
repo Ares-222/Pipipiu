@@ -8,6 +8,7 @@ import type { AdapterRegistry } from '../adapters/registry.ts';
 import type { WatchRow } from '../core/db.ts';
 import { renderWatchAlert } from '../tg/formatter.ts';
 import { parseJsonSafe } from '../core/util.ts';
+import { checkIssuerFreeze } from './freeze.ts';
 
 export interface MonitorAlert {
   chatId: number;
@@ -61,6 +62,23 @@ export async function monitorCycle(
         const sym = CHAINS[w.chain as keyof typeof CHAINS]?.native ?? '';
         balanceText = `${acc.balanceNative} ${sym}`;
       } catch { /* optional */ }
+
+      // №5 (v7) freeze-алерт: если USDT/USDC адреса заморожены эмитентом — сообщаем.
+      // Проверка читает isBlackListed on-chain и кэшируется на 6 ч; алерт — один раз
+      // на эпизод (гвард fzNotified в состоянии watch), без спама каждые 5 минут.
+      if (w.chain === 'tron' || w.chain === 'eth') {
+        const fz = await checkIssuerFreeze(ctx, w.chain, w.addr).catch(() => null);
+        const frozen = (fz ?? []).some((s) => s.frozen);
+        if (frozen && !seen.fzNotified) {
+          alerts.push({
+            chatId: w.chatId,
+            text: `🧊 <b>FREEZE: адрес заморожен эмитентом стейблкоина</b>\n<code>${w.addr}</code> (${w.chain.toUpperCase()})\n\nUSDT/USDC на этом адресе заблокированы on-chain (isBlackListed): переводить с него нельзя, а входящие стейблы рискуют зависнуть. Продолжаю следить — снимется с паузы сама, если разморозят.`,
+            chain: w.chain, addr: w.addr,
+          });
+        }
+        if (frozen) seenNext.fzNotified = true;
+        else delete seenNext.fzNotified;
+      }
 
       for (const t of significant.slice(0, 10)) {
         await ctx.db.addWatchEvents([{

@@ -9,6 +9,7 @@ import type { AdapterRegistry } from '../adapters/registry.ts';
 import { fetchCount, resetFetchCount } from '../core/http.ts';
 import { LabelEngine } from './labels.ts';
 import { buildUnmix } from './unmix.ts';
+import { detectPeelChains, detectCommonFunders, bridgeFinding, structureFindings } from './insights.ts';
 
 export interface TraceOpts {
   depth?: number;         // default 2 (1..4)
@@ -16,6 +17,7 @@ export interface TraceOpts {
   fetchBudget?: number;   // default 30
   onProgress?: (step: number, totalSteps: number, expanded: number, note: string) => void;
   unmix?: boolean;        // default true
+  seedTxs?: Tx[];         // v7: свежий отчёт из KV-кэша — первый fetch (история цели) не нужен
 }
 
 export async function runTrace(
@@ -57,8 +59,14 @@ export async function runTrace(
       visited.add(f.addr);
       let txs: Tx[] = [];
       try {
-        const page = await registry.transactions(chain as never, f.addr, { limit: 50 });
-        txs = page.txs;
+        if (f.d === 0 && opts.seedTxs?.length) {
+          // №25: история цели уже собрана свежим /api/report (KV-кэш) — переиспользуем,
+          // экономя один fetch. Данные те же, что отдал бы адаптер.
+          txs = opts.seedTxs;
+        } else {
+          const page = await registry.transactions(chain as never, f.addr, { limit: 50 });
+          txs = page.txs;
+        }
       } catch {
         continue;
       }
@@ -178,6 +186,24 @@ export async function runTrace(
     if (u) unmixFindings.push(u);
   }
 
+  // v7: структурная картина — пил-чейны, общие источники, мосты. Считается из
+  // уже собранного графа, ноль fetch. Узлы-участники помечаются для UI/PDF.
+  const peel = detectPeelChains([...nodes.values()], [...edges.values()], rootId);
+  const funders = detectCommonFunders([...nodes.values()], [...edges.values()], rootId);
+  const bridgeF = bridgeFinding([...nodes.values()]);
+  const peelIds = new Set(peel.flatMap((p) => p.path.slice(1)));
+  const funderTargets = new Set(funders.flatMap((f) => f.targets));
+  for (const n of nodes.values()) {
+    if (peelIds.has(n.id)) n.peel = true;
+    if (funderTargets.has(n.id)) n.assoc = true;
+  }
+  const structure = {
+    peel: peel.map((p) => ({ addrs: p.addrs, amounts: p.amounts, asset: p.asset, shareKept: p.shareKept })),
+    funders: funders.map((f) => ({ source: f.source, sourceLabel: f.sourceLabel, targets: f.targets })),
+    bridges: [...nodes.values()].filter((n) => n.category === 'bridge').map((n) => n.label ?? n.addr.slice(0, 10)),
+  };
+  const structuralFindings = structureFindings(peel, funders, bridgeF);
+
   // leaks: top out-direction flows from root
   const outEdges = [...edges.values()].filter((e) => e.from === rootId);
   const totalOut = outEdges.reduce((s, e) => s + e.amount, 0) || 1;
@@ -196,7 +222,8 @@ export async function runTrace(
     nodes: [...nodes.values()],
     edges: [...edges.values()],
     leaks,
-    findings: [],
+    findings: structuralFindings,
+    structure,
     unmix: unmixFindings,
     truncated,
     providersUsed: ['trongrid/tronscan/etherscan/blockstream (по сети)'],

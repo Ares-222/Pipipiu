@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react';
-import { api, fmt, fmtUsd, fmtPct, short, levelRu, levelColor, categoryRu, categoryIcon, type WalletReport, type ChainReport, type Finding, type TraceResult } from '../api';
+import { api, fmt, fmtUsd, fmtPct, short, levelRu, levelColor, categoryRu, categoryIcon, type WalletReport, type ChainReport, type Finding, type TraceResult, type MultiChainRow } from '../api';
 import { haptic } from '../tg';
 import { renderCardJpeg } from '../card/card';
 import { makePdf } from '../pdf/makePdf';
 import { makeAmlPdf } from '../pdf/makeAmlPdf';
 import { qrMatrix } from '../lib/qr';
 
-export default function Report({ report, trace, onGraph, notify, onOpenAddr, onRefresh, prev }: {
+export default function Report({ report, trace, onGraph, notify, onOpenAddr, onRefresh, prev, cached }: {
   report: WalletReport;
   trace?: TraceResult | null;
   onGraph: () => void;
@@ -14,11 +14,13 @@ export default function Report({ report, trace, onGraph, notify, onOpenAddr, onR
   onOpenAddr: (addr: string) => void;
   onRefresh: () => Promise<WalletReport | null>;
   prev?: { score: number; ts: number };
+  cached?: boolean;
 }) {
   const cr = report.chains[0];
   const [openFinding, setOpenFinding] = useState<string | null>(null);
   const [openAml, setOpenAml] = useState(false);
   const [busy, setBusy] = useState('');
+  const [mcRows, setMcRows] = useState<MultiChainRow[] | null>(null);
 
   if (!cr) {
     return <div style={{ padding: 16 }}><div className="card">{report.warnings.join(' ') || 'Отчёт пуст'}</div></div>;
@@ -100,6 +102,42 @@ export default function Report({ report, trace, onGraph, notify, onOpenAddr, onR
     notify('⬇ JSON сохранён');
   }
 
+  // v7 (№19): CSV-таблица транзакций документом в чат. JSON отчёта и так прилетает
+  // в mini app — CSV добавляет табличный формат для Excel/Sheets без новых fetch.
+  function csvEscape(v: string | number | undefined): string {
+    const s = String(v ?? '');
+    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+  async function sendCsv() {
+    haptic(); setBusy('csv');
+    try {
+      const rows: string[] = ['date_utc;chain;direction;amount;asset;from;from_label;to;to_label;hash'];
+      for (const c of report.chains) {
+        for (const t of c.txs) {
+          rows.push([
+            new Date(t.ts * 1000).toISOString().replace('T', ' ').slice(0, 19),
+            c.chain, t.direction, t.amount, t.asset,
+            t.from, t.labelFrom?.name ?? '', t.to, t.labelTo?.name ?? '', t.hash,
+          ].map(csvEscape).join(';'));
+        }
+      }
+      const csv = '\uFEFF' + rows.join('\n');
+      const b64 = btoa(unescape(encodeURIComponent(csv)));
+      await api('/pdf', { method: 'POST', body: JSON.stringify({ csv: b64, filename: `ares-${short(addr, 6, 4)}.csv`, caption: `🧾 Транзакции ${short(addr, 8, 6)} · ${report.chains.reduce((n, c) => n + c.txs.length, 0)} записей (CSV)` }) });
+      notify('🧾 CSV отправлен в чат');
+    } catch (e) { notify('⚠️ ' + (e as Error).message); } finally { setBusy(''); }
+  }
+
+  // v7 (№8): мультичейн-сводка одного EVM-адреса по трём сетям.
+  const isEvm = /^0x[0-9a-fA-F]{40}$/.test(addr);
+  async function multichain() {
+    haptic(); setBusy('mc');
+    try {
+      const r = await api<{ chains: MultiChainRow[] }>(`/multichain?addr=${encodeURIComponent(addr)}`);
+      setMcRows(r.chains);
+    } catch (e) { notify('⚠️ ' + (e as Error).message); } finally { setBusy(''); }
+  }
+
   // №12 share: ссылка «только чтение» на снимок отчёта (воркер кладёт в KV на 7 дней).
   async function shareLink() {
     haptic(); setBusy('share');
@@ -135,6 +173,7 @@ export default function Report({ report, trace, onGraph, notify, onOpenAddr, onR
             <div className="mono" style={{ fontSize: 12, marginTop: 4, wordBreak: 'break-all' }}>{addr}</div>
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
               данные на {new Date(report.createdAt * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · источники кэшируются до 10 мин
+              {cached && <span style={{ color: 'var(--info)' }}> · ⚡ из кэша (повтор ≤15 мин — лимит не списан)</span>}
             </div>
           </div>
           {cr.classification && (
@@ -180,6 +219,33 @@ export default function Report({ report, trace, onGraph, notify, onOpenAddr, onR
             <Kpi label="Средний перевод" v={fmtUsd(k.avgTx)} s={`медиана ${fmtUsd(k.medianTx)}`} />
             <Kpi label="Крупнейший перевод" v={fmtUsd(k.maxTx)} />
             <Kpi label="Активных дней" v={String(k.activeDays)} s={k.ageDays !== null ? `за ${k.ageDays} дн. жизни` : 'возраст неизвестен'} />
+          </div>
+        </>
+      )}
+
+      {/* v7 №9: отпечаток активности — когда кошелёк активен по часам UTC */}
+      {cr.activity && (
+        <>
+          <div className="microlabel" style={{ margin: '14px 4px 6px' }}>Отпечаток активности · часы суток (UTC)</div>
+          <div className="card">
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 62 }}>
+              {cr.activity.hist.map((v, h) => {
+                const max = Math.max(...cr.activity!.hist, 1);
+                const inPeak = ((h - cr.activity!.peakFrom + 24) % 24) < 6;
+                return (
+                  <div key={h} style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center', gap: 3 }}>
+                    <div style={{
+                      width: '100%', height: `${Math.max(3, (v / max) * 100)}%`,
+                      background: inPeak ? 'var(--warn)' : '#3b4a6b', borderRadius: 2,
+                    }} title={`${String(h).padStart(2, '0')}:00 — ${v}`} />
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, color: 'var(--muted)', marginTop: 4 }}>
+              <span>00</span><span>06</span><span>12</span><span>18</span><span>23</span>
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8, lineHeight: 1.5 }}>{cr.activity.note}</div>
           </div>
         </>
       )}
@@ -366,7 +432,29 @@ export default function Report({ report, trace, onGraph, notify, onOpenAddr, onR
         <button className="btn" style={{ gridColumn: '1 / -1' }} onClick={amlPdf} disabled={busy === 'amlpdf'}>{busy === 'amlpdf' ? '⏳ Собираю досье…' : '🛡 AML-отчёт (PDF в чат)'}</button>
         <button className="btn" style={{ gridColumn: '1 / -1' }} onClick={shareLink} disabled={busy === 'share'}>{busy === 'share' ? '…' : '🔗 Ссылка для контрагента (только чтение)'}</button>
         <button className="btn btn-ghost" style={{ gridColumn: '1 / -1' }} onClick={exportJson}>⬇ Экспорт JSON</button>
+        <button className="btn" style={{ gridColumn: '1 / -1' }} onClick={sendCsv} disabled={busy === 'csv'}>{busy === 'csv' ? '…' : '🧾 CSV транзакций в чат'}</button>
+        {isEvm && (
+          <button className="btn" style={{ gridColumn: '1 / -1' }} onClick={multichain} disabled={busy === 'mc'}>{busy === 'mc' ? '…' : '🌐 Мультичейн-сводка (ETH · BSC · Polygon)'}</button>
+        )}
       </div>
+
+      {/* v7 №8: результат мультичейн-сводки */}
+      {isEvm && mcRows && (
+        <div className="card" style={{ marginTop: 6 }}>
+          <div className="microlabel" style={{ marginBottom: 6 }}>Мультичейн · один адрес, три сети</div>
+          {mcRows.map((r, i) => (
+            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', fontSize: 13, borderBottom: '1px solid var(--border)' }}>
+              <span>{r.chain === 'eth' ? 'Ethereum' : r.chain === 'bsc' ? 'BNB Chain' : 'Polygon'}</span>
+              <span className="mono" style={{ color: r.error ? 'var(--danger)' : r.balance && r.balance > 0 ? 'var(--text)' : 'var(--muted)' }}>
+                {r.error ? 'источник недоступен' : r.balance && r.balance > 0 ? `${fmt(r.balance, 6)} ${r.chain === 'eth' ? 'ETH' : r.chain === 'bsc' ? 'BNB' : 'POL'}` : 'пусто'}{r.isContract ? ' · контракт' : ''}
+              </span>
+            </div>
+          ))}
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, lineHeight: 1.5 }}>
+            Баланс без истории: показывает, жив ли адрес в других EVM-сетях. Пусто во всех трёх — активность ищи в TRON/TON/BTC/SOL.
+          </div>
+        </div>
+      )}
 
       {/* №13 QR: адрес — сканером, без копирования (защита от подмены буфера обмена) */}
       {(() => {

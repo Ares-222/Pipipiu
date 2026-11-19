@@ -16,6 +16,9 @@ import { telegramLinks, resolveTelegram, resolveTonDomain } from '../engine/tono
 import { syncOfac, syncScamSniffer, downloadOfac, downloadScamSniffer } from '../engine/feeds.ts';
 import { aiComment } from '../engine/ai.ts';
 import { LabelEngine } from '../engine/labels.ts';
+import { compareAddresses } from '../engine/compare.ts';
+import { searchTonTransfers } from '../engine/tonsearch.ts';
+import { detectFormat } from '../core/detect.ts';
 import { DISCLAIMER } from '../core/types.ts';
 import { CHAINS } from '../core/types.ts';
 import { fmtDate } from '../core/util.ts';
@@ -96,7 +99,11 @@ async function handleCommand(deps: RouterDeps, cmd: string, args: string, chatId
         `/ai &lt;адрес&gt; — AI-комментарий к отчёту (OpenRouter, модель бесплатная)`,
         `/profile &lt;адрес&gt; — поведенческий профиль целиком`,
         `/ton &lt;@user|.ton|адрес&gt; — связи с Telegram по публичным NFT/DNS данным`,
-        `/watch, /watchlist, /unwatch — мониторинг каждые 5 минут`,
+        `/tonsearch &lt;TON-адрес&gt; memo=комментарий amount=150 days=30 — найти перевод по memo/сумме`,
+        `/compare &lt;addr1&gt; &lt;addr2&gt; — общие контрагенты и общий источник двух кошельков`,
+        `/multichain &lt;0x-адрес&gt; — сводка по Ethereum · BSC · Polygon одной кнопкой`,
+        `/quota — остатки дневных лимитов`,
+        `/watch, /watchlist, /unwatch — мониторинг каждые 5 минут (freeze-алерты включены)`,
         `/p2p &lt;адрес&gt; — карточка «можно ли отдавать контрагенту»`,
         `/history — последние проверки · /settings — настройки`,
         isAdmin ? `/admin addlabel|labels|syncofac|stats|broadcast|export` : '',
@@ -225,6 +232,33 @@ async function handleCommand(deps: RouterDeps, cmd: string, args: string, chatId
     }
     case 'pdf': {
       await pdfCmd(deps, chatId, args);
+      return;
+    }
+    case 'tonsearch': {
+      await tonSearchCmd(deps, chatId, args);
+      return;
+    }
+    case 'compare': {
+      await compareCmd(deps, chatId, args);
+      return;
+    }
+    case 'multichain': {
+      await multichainCmd(deps, chatId, args);
+      return;
+    }
+    case 'quota': {
+      const u = await getUser(ctx, chatId);
+      const owner = ctx.isOwner(chatId);
+      const left = (used: number, lim: number) => (owner ? '∞ (админ)' : `${Math.max(0, lim - used)} из ${lim}`);
+      await api.sendMessage(chatId, [
+        `📊 <b>Лимиты на сегодня</b> (обновление в 00:00 UTC)`,
+        `· Быстрых отчётов: ${left(u.quickUsed, ctx.cfg.quotaQuick)}`,
+        `· Расследований: ${left(u.deepUsed, ctx.cfg.quotaDeep)}`,
+        `· AML-проверок: ${left(u.amlUsed, ctx.cfg.quotaAml)}`,
+        `· Адресов мониторинга: ${owner ? '∞ (админ)' : ctx.cfg.quotaWatches}`,
+        ``,
+        `<i>Квоты — защита free-лимитов провайдеров. Повторная проверка того же адреса в течение 15 минут не списывает лимит (кэш).</i>`,
+      ].join('\n'));
       return;
     }
     case 'admin': {
@@ -411,6 +445,117 @@ async function watchlistCmd(deps: RouterDeps, chatId: number): Promise<void> {
   const lines = mine.map((w) => `· <code>${esc(w.addr)}</code> (${esc(w.chain)})${w.lastCheck ? ` · обновлён ${fmtDate(w.lastCheck)}` : ''}`);
   const evLines = events.map((e) => `  ${e.direction === 'in' ? '🔻' : '🔺'} ${e.amount} ${esc(e.asset)} ${e.direction === 'in' ? 'от' : '→'} <code>${esc(e.counterparty.slice(0, 10))}…</code>${e.label ? ` ${esc(e.label)}` : ''}`);
   await api.sendMessage(chatId, [`🔔 <b>Мониторинг (${mine.length})</b>`, ...lines, evLines.length ? `\nПоследние события:` : '', ...evLines].filter(Boolean).join('\n'));
+}
+
+// v7 (№4): поиск TON-перевода по memo/сумме/окну — «найди мой перевод».
+async function tonSearchCmd(deps: RouterDeps, chatId: number, arg: string): Promise<void> {
+  const { ctx, api } = deps;
+  const parts = arg.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    await api.sendMessage(chatId, [
+      `<b>Поиск перевода в TON</b>`,
+      `<code>/tonsearch &lt;TON-адрес&gt; memo=комментарий amount=150 days=30</code>`,
+      `Порядок флагов любой; вместо флагов можно просто перечислить: сумма — число, остальное — считается memo.`,
+      `Пример: <code>/tonsearch EQA…TQr memo=за услугу amount=150 days=14</code>`,
+    ].join('\n'));
+    return;
+  }
+  const addr = parts[0];
+  let memo: string | undefined, amount: number | undefined, days: number | undefined;
+  for (const p of parts.slice(1)) {
+    const m = p.match(/^(memo|amount|days)=(.+)$/i);
+    if (m) {
+      if (m[1].toLowerCase() === 'memo') memo = m[2];
+      if (m[1].toLowerCase() === 'amount') amount = parseFloat(m[2].replace(',', '.')) || undefined;
+      if (m[1].toLowerCase() === 'days') days = parseInt(m[2], 10) || undefined;
+      continue;
+    }
+    if (/^[\d.,]+$/.test(p)) amount = parseFloat(p.replace(',', '.')) || undefined;
+    else memo = [memo, p].filter(Boolean).join(' ');
+  }
+  if (!memo && !amount) { await api.sendMessage(chatId, 'Укажи хотя бы одно: memo=… или amount=…'); return; }
+  await api.sendMessage(chatId, '🔎 Ищу по истории TON (до 30 сек)…').catch(() => { /* ignore */ });
+  try {
+    const r = await searchTonTransfers(ctx, deps.registry, addr, { memo, amount, days });
+    const lines = [`🔎 <b>ПОИСК ПЕРЕВОДА · TON</b>`, `<code>${addr}</code>`, r.note, ``];
+    if (!r.matches.length) lines.push('Совпадений нет. Проверь комментарий (регистр не важен) и окно времени; увеличь days при необходимости.');
+    for (const m of r.matches.slice(0, 12)) {
+      const dt = new Date(m.ts * 1000).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
+      const dir = m.direction === 'in' ? '▼ вход' : m.direction === 'out' ? '▲ вывод' : '↻ себе';
+      lines.push(`${dir} <b>${m.amount} ${m.asset}</b> · ${dt} UTC`);
+      lines.push(`   совпало: ${m.reason}${m.memo ? ` · memo: ${m.memo.slice(0, 40)}` : ''}`);
+      lines.push(`   <code>${m.hash.slice(0, 46)}${m.hash.length > 46 ? '…' : ''}</code>`);
+    }
+    lines.push('', `<i>${DISCLAIMER}</i>`);
+    await api.sendMessage(chatId, lines.join('\n'));
+  } catch (e) {
+    await api.sendMessage(chatId, friendlyError(e));
+  }
+}
+
+// v7 (№14): пересечение двух кошельков одной сети.
+async function compareCmd(deps: RouterDeps, chatId: number, arg: string): Promise<void> {
+  const { ctx, api } = deps;
+  const parts = arg.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) {
+    await api.sendMessage(chatId, 'Сравнение двух кошельков: <code>/compare &lt;addr1&gt; &lt;addr2&gt;</code> — общие контрагенты и общий источник финансирования.');
+    return;
+  }
+  const [a, b] = parts;
+  const fmtA = detectFormat(a)[0];
+  const chain = fmtA?.chains[0] ?? 'tron';
+  if (!fmtA || fmtA.kind === 'tx-hash') { await api.sendMessage(chatId, 'Первый аргумент не похож на адрес кошелька.'); return; }
+  await api.sendMessage(chatId, '⚖️ Сравниваю кошельки (до 30 сек)…').catch(() => { /* ignore */ });
+  try {
+    const r = await compareAddresses(ctx, deps.registry, chain, a, b);
+    const lines = [`⚖️ <b>СРАВНЕНИЕ КОШЕЛЬКОВ · ${chain.toUpperCase()}</b>`, `<code>${a}</code>`, `<code>${b}</code>`, '', r.note, ``];
+    if (r.funders.length) lines.push(`🔗 Общий источник финансирования (отправлял обоим): ${r.funders.map((f) => `<code>${f}</code>`).join(', ')} — косвенная связь кошельков.`);
+    if (r.receivers.length) lines.push(`↔ Общие получатели (оба переводили им): ${r.receivers.map((f) => `<code>${f}</code>`).join(', ')}`);
+    if (!r.common.length && !r.funders.length && !r.receivers.length) lines.push('Прямых пересечений в выборке не найдено: общих контрагентов нет.');
+    if (r.common.length) {
+      lines.push('', `<b>Общие контрагенты (${r.common.length}):</b>`);
+      for (const c of r.common.slice(0, 10)) {
+        lines.push(`· <code>${c.addr.slice(0, 12)}…</code>${c.label ? ` ${c.label}` : ''} · A ${c.volA.toFixed(2)} / B ${c.volB.toFixed(2)} ${c.asset}`);
+      }
+    }
+    lines.push('', `<i>${DISCLAIMER}</i>`);
+    await api.sendMessage(chatId, lines.join('\n'));
+  } catch (e) {
+    await api.sendMessage(chatId, friendlyError(e));
+  }
+}
+
+// v7 (№8): мультичейн-сводка EVM-адреса.
+async function multichainCmd(deps: RouterDeps, chatId: number, arg: string): Promise<void> {
+  const { ctx, api, registry } = deps;
+  const addr = arg.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) {
+    await api.sendMessage(chatId, 'Мультичейн-сводка для EVM-адресов: <code>/multichain 0x…</code> — Ethereum · BSC · Polygon.');
+    return;
+  }
+  const chains = ['eth', 'bsc', 'polygon'] as const;
+  const names: Record<string, string> = { eth: 'Ethereum', bsc: 'BNB Chain', polygon: 'Polygon' };
+  const rows = await Promise.allSettled(chains.map(async (c) => {
+    const adapter = registry.get(c);
+    if (!adapter) throw new Error('нет адаптера');
+    const acc = await adapter.account(addr);
+    return { c, acc };
+  }));
+  const lines = [`🌐 <b>МУЛЬТИЧЕЙН · один адрес, три сети</b>`, `<code>${addr}</code>`, ``];
+  let any = false;
+  for (const [i, r] of rows.entries()) {
+    if (r.status === 'fulfilled') {
+      const { c, acc } = r.value;
+      any = any || acc.balanceNative > 0;
+      lines.push(`· ${names[c]}: ${acc.balanceNative > 0 ? `<b>${acc.balanceNative}</b> ${c === 'eth' ? 'ETH' : c === 'bsc' ? 'BNB' : 'POL'}` : 'пусто'}${acc.isContract ? ' · смарт-контракт' : ''}${acc.partial ? ' · частичные данные' : ''}`);
+    } else {
+      lines.push(`· ${names[chains[i]]}: источник недоступен (${String((r.reason as Error).message).slice(0, 60)})`);
+    }
+  }
+  lines.push(any ? '' : 'Балансов нет ни в одной из трёх сетей: адрес либо новый, либо активен в других сетях (TRON/TON/BTC/SOL — пришли адрес отдельно).');
+  lines.push('', `Полный отчёт с историей: пришли адрес как обычно — <code>/check ${addr}</code>`);
+  lines.push(`<i>${DISCLAIMER}</i>`);
+  await api.sendMessage(chatId, lines.join('\n'));
 }
 
 async function pdfCmd(deps: RouterDeps, chatId: number, arg: string): Promise<void> {

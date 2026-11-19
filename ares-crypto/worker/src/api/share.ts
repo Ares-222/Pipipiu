@@ -79,7 +79,7 @@ export function renderSharePage(rep: WalletReport, token: string): string {
 
   <div class="card">
     <div class="mono muted" style="word-break:break-all">${esc(rep.input)}</div>
-    ${acc ? `<div class="muted" style="margin-top:4px">${esc(acc.chain.toUpperCase())} · ${esc(fmt(acc.balanceNative))} ${esc(acc.chain === 'tron' ? 'TRX' : acc.chain === 'ethereum' ? 'ETH' : '')} · tx ${esc(acc.txCount ?? '—')}</div>` : ''}
+    ${acc ? `<div class="muted" style="margin-top:4px">${esc(acc.chain.toUpperCase())} · ${esc(fmt(acc.balanceNative))} ${esc(acc.chain === 'tron' ? 'TRX' : 'ETH')} · tx ${esc(acc.txCount ?? '—')}</div>` : ''}
     <div style="display:flex;align-items:baseline;gap:10px;margin-top:10px">
       <span class="score" style="color:${esc(LEVEL_COLOR[v.level] ?? '#8A8A90')}">${esc(v.score)}</span>
       <span class="muted">/100 · <b style="color:${esc(LEVEL_COLOR[v.level] ?? '#8A8A90')}">${esc(LEVEL_RU[v.level] ?? esc(v.level))}</b></span>

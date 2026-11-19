@@ -83,10 +83,10 @@ export class BotApi {
     }
   }
 
-  async sendDocument(chatId: number, bytes: Uint8Array, filename: string, caption?: string): Promise<number | undefined> {
+  async sendDocument(chatId: number, bytes: Uint8Array, filename: string, caption?: string, mime = 'application/pdf'): Promise<number | undefined> {
     const form = new FormData();
     form.append('chat_id', String(chatId));
-    form.append('document', new Blob([bytes as BlobPart], { type: 'application/pdf' }), filename);
+    form.append('document', new Blob([bytes as BlobPart], { type: mime }), filename);
     if (caption) form.append('caption', caption.slice(0, 1024));
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 60000);

@@ -143,7 +143,7 @@ export default {
     // №11 ежедневная сводка по списку наблюдения (07:00 UTC): что изменилось за сутки.
     if (event.cron === '0 7 * * *') {
       try {
-        await digestDaily(ctx, (chatId, text) => api.sendMessage(chatId, text));
+        await digestDaily(ctx, async (chatId, text) => { await api.sendMessage(chatId, text); });
       } catch (e) {
         await ctx.db.addErrorLog('cron-digest', String((e as Error).message));
       }

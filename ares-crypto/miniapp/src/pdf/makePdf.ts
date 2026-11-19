@@ -92,6 +92,7 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
   const margin = 40;
   const contentW = W - margin * 2;
   let y = 78;
+  let secNum = 0; // v7: сквозная нумерация разделов досье
 
   function paintPage(): void {
     doc.setFillColor(...C.bg);
@@ -137,12 +138,13 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
   function section(title: string): void {
     ensureSpace(30);
     y += 8;
+    secNum++;
     doc.setFillColor(...C.red);
     doc.roundedRect(margin, y - 12, 3, 17, 1.5, 1.5, 'F');
     doc.setFont(FONT_NAME, 'normal');
     doc.setFontSize(11);
     doc.setTextColor(...C.red);
-    doc.text(title.toLocaleUpperCase('ru-RU'), margin + 12, y);
+    doc.text(`${secNum}. ${title.toLocaleUpperCase('ru-RU')}`, margin + 12, y);
     y += 18;
   }
 
@@ -250,6 +252,16 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
   doc.setFontSize(23);
   doc.setTextColor(...C.white);
   doc.text('Аналитическое досье', margin, 78);
+  // v7: бейдж вердикта на обложке — уровень риска виден до раскрытия досье.
+  const lvlCol: RGB = report.verdict.level === 'critical' || report.verdict.level === 'high' ? BADC : report.verdict.level === 'medium' ? C.warning : OKC;
+  const badge = `${report.verdict.score}/100 · ${levelRu(report.verdict.level).toUpperCase()}`;
+  doc.setFontSize(9);
+  const bw2 = doc.getTextWidth(badge) + 22;
+  doc.setFillColor(...lvlCol);
+  doc.roundedRect(W - margin - bw2, 58, bw2, 24, 6, 6, 'F');
+  doc.setTextColor(10, 10, 11);
+  doc.setFontSize(10);
+  doc.text(badge, W - margin - bw2 + 11, 74);
   doc.setFontSize(9);
   doc.setTextColor(...C.muted);
   doc.text(`Сформировано: ${new Date(report.createdAt * 1000).toLocaleString('ru-RU')}`, margin, 96);
@@ -262,6 +274,19 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
     doc.setFontSize(7);
     doc.setTextColor(...C.muted);
     doc.text('Карточка сформирована из данных этого отчёта.', margin, 118 + cardH + 18);
+    // v7: содержание досье под карточкой — заказчик видит объём до чтения.
+    doc.setFontSize(8);
+    doc.setTextColor(...C.white);
+    const tocY = 118 + cardH + 44;
+    doc.text('Что внутри:', margin, tocY);
+    doc.setFontSize(7.5);
+    doc.setTextColor(...C.muted);
+    const toc = [
+      'Резюме и KPI · Признаки риска · Профиль поведения и транзитность · AML/exposure',
+      'Отпечаток активности · Токены и QR · Методология, обозначения, глоссарий',
+      'Полный реестр транзакций · Расследование: граф, поток средств, unmix · Рекомендации',
+    ];
+    toc.forEach((t, i) => doc.text(t, margin, tocY + 16 + i * 13));
   } catch {
     doc.setFontSize(9);
     doc.setTextColor(...C.warning);
@@ -310,6 +335,31 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
         { label: 'КРУПНЕЙШИЙ', value: fmtUsd(k.maxTx), sub: 'в выборке', color: INFOC },
         { label: 'АКТИВНЫХ ДНЕЙ', value: String(k.activeDays), sub: k.ageDays === null ? 'в выборке' : `возраст ${k.ageDays} дн.` },
       ]);
+    }
+
+    // v7 №9: отпечаток активности — гистограмма по часам суток (UTC) прямо в PDF.
+    if (cr.activity) {
+      section('Отпечаток активности · часы суток (UTC)');
+      const hist = cr.activity.hist;
+      const max = Math.max(...hist, 1);
+      const colW = contentW / 24;
+      const by = y + 6;
+      const bh = 62;
+      ensureSpace(bh + 56);
+      for (let h = 0; h < 24; h++) {
+        const inPeak = ((h - cr.activity.peakFrom + 24) % 24) < 6;
+        const hgt = Math.max(2, (hist[h] / max) * bh);
+        const barCol: RGB = inPeak ? C.warning : [59, 74, 107];
+        doc.setFillColor(...barCol);
+        doc.roundedRect(margin + h * colW + 1.5, by + bh - hgt, colW - 3, hgt, 1.5, 1.5, 'F');
+        if (h % 6 === 0 || h === 23) {
+          doc.setFontSize(6);
+          doc.setTextColor(...C.muted);
+          doc.text(String(h), margin + h * colW + colW / 2, by + bh + 11, { align: 'center' });
+        }
+      }
+      y = by + bh + 20;
+      textBlock(cr.activity.note, 7.5, C.muted, 4);
     }
 
     if (cr.account.tokens.length) {
@@ -477,6 +527,22 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
   textBlock('AML-скоринг: каждый источник «грязи» оценивается как base × доля входящего объёма × затухание по времени контакта (base: прямой контакт 100, 1 хоп 70, 2 хопа 45, 3 хопа 20; затухание 0,5^лет). Итоговая оценка объединяет источники вероятностно: 100 × (1 − Π(1 − score/100)). Уровни: 0–20 чистый, 21–40 низкий, 41–60 средний, 61–80 высокий, 81–100 критический.', 7.5, C.muted, 3);
   textBlock('Ограничения честно: анализируется выборка последних транзакций (не вся история адреса); граф может быть недостроен по бюджету запросов; метки контрагентов вероятностные; отсутствие совпадений не равно гарантии чистоты (закрытые базы и приватные данные не видны). Досье — вероятностная интерпретация публичных данных блокчейна, не юридическое заключение и не финансовый совет.', 7.5, C.warning, 3);
 
+  section('Обозначения и как читать');
+  textBlock('Досье использует единый визуальный язык отчёта, карточки и графа расследования:', 7.5, C.muted, 3);
+  const notations: [string, string][] = [
+    ['Цвет признака риска', 'red — серьёзный сигнал (миксер/скам/санкции), yellow — подозрительный (транзит, пыль), blue — нейтральный/информационный (мост, метка сервиса), gray — шум.'],
+    ['Пил-чейн (цепочка «раздевания»)', 'объём проходит через 2+ адресов, и на каждом шаге доминирующий переход уносит большую часть денег — типичный рисунок вывода «грязных» средств. Эвристика: вероятностно, не факт.'],
+    ['Мост', 'узел-мост (Stargate, Across и др.) означает: деньги могли покинуть эту сеть. Продолжение — по тому же адресу в других сетях (мультичейн-сводка).'],
+    ['Пылевая атака (dust)', 'множество входов меньше $2 с разных адресов. Так деанонимизируют получателей. Не отвечайте и не пересылайте такие переводы.'],
+    ['Общий источник финансирования', 'один адрес отправлял средства нескольким кошелькам графа — косвенная связь «одного спонсора» между ними.'],
+    ['«?» и пунктир в графе', 'тип адреса угадан движком по структуре потоков (fan-in хаб и т.п.), это НЕ метка провайдера.'],
+    ['Unmix-методы', 'H1 — тот же адрес внёс и выводил (уверенность 0,9); H2 — прямой перевод между депозит- и вывод-стороной виден в блокчейне (0,75); H3 — первый совпадающий вывод FIFO того же номинала (0,2–0,35); 1/n — совпала только сумма (база).'],
+    ['Сходимость unmix', 'сколько объёма депозитов нашло пары среди выводов из миксера (приём SlowMist); ~100% — вся выборка сопоставлена.'],
+    ['«Из кэша»', 'отчёт повторно взят из кэша (≤15 минут) — лимиты дня не списаны, данные помечены временем снимка.'],
+  ];
+  for (const [term, def] of notations) textBlock(`${term} — ${def}`, 7.5, C.white, 1);
+  y += 3;
+
   section('Глоссарий');
   const glossary: [string, string][] = [
     ['Хоп', 'расстояние в графе переводов: 1 хоп — прямой контрагент, 2 хопа — контрагент контрагента.'],
@@ -488,6 +554,8 @@ export async function makePdf(report: WalletReport, trace?: TraceResult | null):
     ['Dust', 'пыль — входы на копейки, шум для скоринга, учитываются отдельно.'],
     ['Вероятностная метка', 'тип адреса угадан по структуре потоков (помечен «?»), а не взят из публичного реестра.'],
     ['Freeze-лист', 'список замороженных адресов внутри контракта стейблкоина: такие адреса не могут перевести свои USDT/USDC.'],
+    ['Отпечаток активности', 'распределение переводов по часам суток (UTC): подсказывает часовой пояс и «живой/скрипт» режим владельца. Честно считается только на выборке из 12+ переводов.'],
+    ['DEX-роут (TON)', 'своп через ston.fi / DeDust и аналоги: контрагент — контракт обмена, а не личный кошелёк; в истории показывается как «swap DEX: X → Y».'],
   ];
   for (const [term, def] of glossary) textBlock(`${term} — ${def}`, 7.5, C.white, 1);
 

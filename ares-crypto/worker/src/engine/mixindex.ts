@@ -148,7 +148,16 @@ export async function collectMixerIndex(ctx: AppCtx): Promise<string | null> {
     await ctx.kv.put(`mixidx:reg:${chain}`, '1');
   }
 
-  const latest = await latestBlockOf(chain, key, chainId);
+  // №27 (v7) адаптивный крон: latest-блок кэшируется на 15 минут — когда цепь
+  // догнала голову, запуск тратит 0 внешних запросов (только чтение KV) вместо
+  // eth_blockNumber каждые 5 минут. Чекпоинты дальше решают сами: `from >= latest`
+  // означает «синхронизировано», проход тихо завершается.
+  const latestKey = `mixidx:latest:${chain}`;
+  let latest = parseInt((await ctx.kv.get(latestKey)) ?? '0', 10) || 0;
+  if (!latest) {
+    latest = await latestBlockOf(chain, key, chainId);
+    await ctx.kv.put(latestKey, String(latest), 900);
+  }
   let dCount = 0, wCount = 0, depBudget = DEP_CAP;
   const tsBudget = { left: TS_CAP };
 

@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import cytoscape from 'cytoscape';
-import { fmt, short, categoryRu, categoryRuFull, categoryIcon, type WalletReport, type TraceResult, type GraphNode, type UnmixFinding } from '../api';
+import { fmt, short, categoryRu, categoryRuFull, categoryIcon, CAT_COLORS, DANGER_CATS, computeGraphVerdict, type WalletReport, type TraceResult, type GraphNode, type UnmixFinding } from '../api';
 import type { TraceResultLeak } from '../api';
 import { haptic } from '../tg';
+import { api } from '../api';
+import { renderGraphPhoto } from '../graphPhoto';
+import { renderFlowPhoto } from '../flowPhoto';
 
-// Экран расследования (редизайн 17.11: «серый и не особо понятный» → наглядный).
+// Экран расследования (редизайн 17.11: «серый и не особо понятный» → наглядный;
+// v7 19.11: + фото графа/потока в чат, структурные находки, теги пил-чейн/общий источник).
 // Ключевые решения:
 //  1) ВЕРДИКТ сверху: куда уходят деньги из целевого кошелька — до того, как
 //     пользователь погрузился в граф;
@@ -12,16 +16,11 @@ import { haptic } from '../tg';
 //     потоки, стрелки направления, пульсирующая красная «ЦЕЛЬ»;
 //  3) ИТОГ-карточки утечек с долей и типом контрагента;
 //  4) unmix-матчинг миксеров показывается отдельно с вероятностями.
-// Палитра типов узлов. Приоритет честности: метка провайдера > структурная
-// эвристика (probable: полупрозрачный цвет + «?» + пунктирная рамка) >
-// личный/неопознанный. Цвета различимы между собой.
-const CAT_COLORS: Record<string, string> = {
-  cex: '#3B82F6', tgbots: '#EC4899', service: '#2DD4BF', payment: '#F59E0B', bridge: '#8B5CF6',
-  mixer: '#D40000', scam: '#FF4D6D', sanctioned: '#E5E7EB', contract: '#6B7280',
-  token: '#10B981', personal: '#9CA3AF',
-};
+// Палитра типов узлов — в api.ts (общая с фото-рендером). Приоритет честности:
+// метка провайдера > структурная эвристика (probable: полупрозрачный цвет + «?» +
+// пунктирная рамка) > личный/неопознанный.
+
 const CAT_ORDER = ['cex', 'tgbots', 'service', 'payment', 'bridge', 'mixer', 'scam', 'sanctioned', 'contract', 'token', 'personal'];
-const DANGER_CATS = new Set(['mixer', 'scam', 'sanctioned']);
 
 function colorOf(n: GraphNode): string {
   const base = CAT_COLORS[n.category ?? 'personal'] ?? '#9CA3AF';
@@ -58,53 +57,40 @@ function chipLabel(cat: string, allProbable: boolean): string {
 
 type Verdict = { tone: 'bad' | 'warn' | 'ok'; icon: string; title: string; detail: string };
 
-function computeVerdict(nodes: GraphNode[], leaks: TraceResultLeak[]): Verdict {
-  const dangerLeaks = leaks.filter((l) => DANGER_CATS.has(l.category ?? ''));
-  const dangerShare = dangerLeaks.reduce((s, l) => s + l.share, 0);
-  const cnt = (c: string) => nodes.filter((n) => !n.isRoot && n.category === c).length;
-  const mixerCnt = cnt('mixer'), scamCnt = cnt('scam'), sancCnt = cnt('sanctioned');
-  const dangerCnt = mixerCnt + scamCnt + sancCnt;
-
-  if (dangerShare > 0.02) {
-    const names = [...new Set(dangerLeaks.map((l) => categoryRuFull(l.category, l.probable)))].join(', ');
-    return {
-      tone: 'bad', icon: '🚨', title: `Высокий риск: ~${Math.round(dangerShare * 100)}% исходящих уходит в рисковые точки`,
-      detail: `${names}. Это прямые переводы от целевого кошелька — самые надёжные сигналы.`,
-    };
-  }
-  if (dangerCnt > 0) {
-    const parts: string[] = [];
-    if (mixerCnt) parts.push(`миксеров ${mixerCnt}`);
-    if (scamCnt) parts.push(`скам-адресов ${scamCnt}`);
-    if (sancCnt) parts.push(`санкционных ${sancCnt}`);
-    return {
-      tone: 'warn', icon: '⚠️', title: 'В графе есть рисковые узлы',
-      detail: `${parts.join(' · ')}. Прямые исходящие платежи целевого кошелька — на нейтральные адреса, но рисковые точки в его окружении.`,
-    };
-  }
-  return {
-    tone: 'ok', icon: '✅', title: 'Рисковых конечных точек не найдено',
-    detail: 'Среди прямых исходящих нет миксеров, скам- и санкционных адресов. Это не гарантия чистоты — смотрите AML-скоринг в отчёте.',
-  };
-}
-
-export default function Graph({ report, trace, onOpenAddr }: {
+export default function Graph({ report, trace, onOpenAddr, notify }: {
   report: WalletReport | null;
   trace: TraceResult | null;
   onOpenAddr: (addr: string) => void;
+  notify: (m: string) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [minEdge, setMinEdge] = useState(0);
   const [showLabels, setShowLabels] = useState(true);
+  const [photoBusy, setPhotoBusy] = useState('');
+
+  // v7 (№16/№17): фото расследования и потока средств в чат — рендер в клиенте,
+  // воркер только релеит JPEG в sendPhoto. Красиво и наглядно, без скриншота webview.
+  async function sendPhoto(kind: 'graph' | 'flow') {
+    if (!trace) return;
+    haptic(); setPhotoBusy(kind);
+    try {
+      const jpeg = kind === 'graph' ? await renderGraphPhoto(trace) : await renderFlowPhoto(trace);
+      const caption = kind === 'graph'
+        ? `🔍 Расследование ${trace.chain.toUpperCase()} · ${short(trace.root, 8, 6)} · радар: ЦЕЛЬ → кольца связей`
+        : `📤 Поток средств (root→leaks) · ${short(trace.root, 8, 6)} · толщина стрелки = доля исходящих`;
+      await api('/render', { method: 'POST', body: JSON.stringify({ jpeg, caption }) });
+      notify('📸 Фото отправлено в чат');
+    } catch (e) { notify('⚠️ ' + (e as Error).message); } finally { setPhotoBusy(''); }
+  }
 
   const nodes = trace?.nodes ?? [];
   const edges = trace?.edges ?? [];
   const unmix = (trace?.unmix ?? []) as UnmixFinding[];
 
   // ВЕРДИКТ: считается из прямых исходящих (leaks) и рисковых узлов графа.
-  const verdict = useMemo(() => computeVerdict(nodes, trace?.leaks ?? []), [nodes, trace]);
+  const verdict = useMemo(() => computeGraphVerdict(nodes, trace?.leaks ?? []), [nodes, trace]);
 
   // Стат-чипы: узлы/связи/глубина/оборот в графе.
   const stats = useMemo(() => {
@@ -352,6 +338,8 @@ export default function Graph({ report, trace, onOpenAddr }: {
           <span style={{ width: 9, height: 9, borderRadius: '50%', border: '1px solid #3A3A44', opacity: 0.6, flexShrink: 0 }} />
           тусклые — дальние связи ({nodes.length - 1 - hop1Ids.size})
         </span>
+        {(trace?.structure?.peel?.length ?? 0) > 0 && <span className="glyph-chip">⛓ узел пил-чейна</span>}
+        {(trace?.structure?.funders?.length ?? 0) > 0 && <span className="glyph-chip">🔗 общий источник</span>}
       </div>
 
       {/* Шпаргалка одним взглядом — всегда раскрыта (details оставлен для деталей) */}
@@ -374,6 +362,8 @@ export default function Graph({ report, trace, onOpenAddr }: {
         <button className="btn" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => { setMinEdge(0); }}>Все суммы</button>
         <button className="btn" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => setMinEdge(1000)}>≥ 1000</button>
         <button className="btn" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => setMinEdge(10000)}>≥ 10k</button>
+        <button className="btn btn-red" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => void sendPhoto('graph')} disabled={photoBusy === 'graph'}>{photoBusy === 'graph' ? '…' : '📸 Граф в чат'}</button>
+        <button className="btn" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => void sendPhoto('flow')} disabled={photoBusy === 'flow'}>{photoBusy === 'flow' ? '…' : '📸 Поток в чат'}</button>
       </div>
       <div id="graph-wrap" ref={wrapRef} style={{
         height: 560,
@@ -396,6 +386,12 @@ export default function Graph({ report, trace, onOpenAddr }: {
             {hubIds.has(selected.id) && !selected.isRoot && (
               <div style={{ fontSize: 11, color: 'var(--warn)', marginTop: 2 }}>◉ хаб: один из крупнейших по обороту в этой выборке</div>
             )}
+            {selected.peel && (
+              <div style={{ fontSize: 11, color: 'var(--warn)', marginTop: 2 }}>⛓ узел пил-чейна: «раздевающаяся» цепочка — каждый переход уносит большую часть объёма</div>
+            )}
+            {selected.assoc && (
+              <div style={{ fontSize: 11, color: 'var(--info)', marginTop: 2 }}>🔗 у этого узла и ещё одного общий источник финансирования — косвенная связь</div>
+            )}
             <div className="mono" style={{ fontSize: 11, margin: '4px 0', wordBreak: 'break-all' }}>{selected.addr}</div>
             {selected.label && <div style={{ fontSize: 12, color: 'var(--warn)' }}>🏷 {selected.label}</div>}
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
@@ -408,6 +404,19 @@ export default function Graph({ report, trace, onOpenAddr }: {
           </div>
         )}
       </div>
+
+      {/* v7: структурная картина — то, что отличает «распутывание» от веера вылетов */}
+      {(trace?.findings ?? []).length > 0 && (
+        <>
+          <div className="microlabel" style={{ margin: '16px 4px 8px' }}>Структура графа · распутанные связи</div>
+          {trace!.findings.map((f, i) => (
+            <div key={i} className="card2" style={{ marginBottom: 6, fontSize: 12, lineHeight: 1.5, borderColor: 'rgba(245,158,11,.35)' }}>
+              <b style={{ color: 'var(--warn)' }}>{f.startsWith('Пил-чейн') ? '⛓ ' : f.startsWith('Общий источник') ? '🔗 ' : '🌉 '}</b>
+              {f}
+            </div>
+          ))}
+        </>
+      )}
 
       {/* Unmix: «человекочитаемое» распутывание миксеров — утверждённый визуал 18.11 (вердикт + истории связей) */}
       {unmix.length > 0 && (
