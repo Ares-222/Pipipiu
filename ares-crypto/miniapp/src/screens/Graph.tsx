@@ -22,6 +22,9 @@ import { renderFlowPhoto } from '../flowPhoto';
 
 const CAT_ORDER = ['cex', 'tgbots', 'service', 'payment', 'bridge', 'mixer', 'scam', 'sanctioned', 'contract', 'token', 'personal'];
 
+// v7.2.1: тикер нативной монеты по сети — для строки «Баланс сейчас» (формат как в отчёте).
+const CHAIN_ASSET: Record<string, string> = { tron: 'TRX', ton: 'TON', btc: 'BTC', sol: 'SOL', bsc: 'BNB', polygon: 'POL', eth: 'ETH' };
+
 function colorOf(n: GraphNode): string {
   const base = CAT_COLORS[n.category ?? 'personal'] ?? '#9CA3AF';
   return n.probable ? `${base}99` : base;
@@ -93,19 +96,29 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
   const edges = trace?.edges ?? [];
   const unmix = (trace?.unmix ?? []) as UnmixFinding[];
 
+  // v7.2.1: баланс цели «на данный момент» — из паспорта (report, account.balanceNative).
+  // Паспорта нет (граф открыт без отчёта) — честно не показываем, не выдумываем.
+  const crBal = report?.chains.find((c) => c.chain === trace?.chain) ?? report?.chains[0];
+  const balAsset = CHAIN_ASSET[crBal?.chain ?? trace?.chain ?? ''] ?? '';
+  const bal = crBal?.account?.balanceNative;
+  const hasBal = typeof bal === 'number' && Number.isFinite(bal);
+  const balLine = hasBal ? `${fmt(bal, 2)} ${balAsset}` : undefined;
+
   // ВЕРДИКТ: считается из прямых исходящих (leaks) и рисковых узлов графа.
   const verdict = useMemo(() => computeGraphVerdict(nodes, trace?.leaks ?? []), [nodes, trace]);
 
-  // Стат-чипы: узлы/связи/глубина/оборот в графе.
+  // Стат-чипы: узлы/связи/глубина/оборот в графе + баланс цели на данный момент.
   const stats = useMemo(() => {
     const turnover = edges.reduce((s, e) => s + e.amount, 0);
-    return [
+    const arr = [
       { k: 'Узлов', v: String(nodes.length) },
       { k: 'Связей', v: String(edges.length) },
       { k: 'Глубина', v: `${trace?.depth ?? 2} хоп.` },
       { k: 'Оборот', v: `${fmt(turnover, 0)} ${edges[0]?.asset ?? ''}` },
     ];
-  }, [nodes, edges, trace]);
+    if (balLine) arr.push({ k: 'Баланс сейчас', v: balLine });
+    return arr;
+  }, [nodes, edges, trace, balLine]);
 
   // Легенда: какие категории реально есть в графе (+ сколько узлов каждого типа).
   const legend = useMemo(() => {
@@ -340,7 +353,7 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
           <div className="graph-hint" style={{ marginBottom: 8 }}>
             <b>Схема потоков:</b> сверху — проверяемый кошелёк (ЦЕЛЬ); ниже — кто входит и куда уходят деньги, сгруппировано по типам адресов. Полоса = доля направления; «?» — тип угадан по потокам, не метка провайдера. Тапни адрес — откроется отчёт по нему. Полный круг связей — во «🕸 Радаре».
           </div>
-          <FlowScheme nodes={nodes} edges={edges} rootId={rootId} onOpenAddr={onOpenAddr} />
+          <FlowScheme nodes={nodes} edges={edges} rootId={rootId} balLine={balLine} onOpenAddr={onOpenAddr} />
         </>
       ) : (
         <>
@@ -414,6 +427,11 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4, lineHeight: 1.5 }}>
               Оборот: <b style={{ color: 'var(--text)' }}>{fmt(selected.volume)}</b> · вход {fmt(selected.in)} · выход {fmt(selected.out)} · {selected.txCount} tx
             </div>
+            {selected.isRoot && balLine && (
+              <div style={{ fontSize: 11.5, color: 'var(--text)', marginTop: 3 }}>
+                💰 Баланс на данный момент: <b className="mono">{balLine}</b>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <button className="btn btn-red" style={{ fontSize: 12, padding: '8px 12px' }} onClick={() => onOpenAddr(selected.addr)}>Открыть отчёт по нему</button>
               <button className="btn" style={{ fontSize: 12, padding: '8px 12px' }} onClick={() => setSelected(null)}>Закрыть</button>
@@ -560,10 +578,11 @@ function flowGroups(nodes: GraphNode[], list: GraphEdge[], side: 'in' | 'out') {
     .sort((a, b) => b.subtotal - a.subtotal);
 }
 
-function FlowScheme({ nodes, edges, rootId, onOpenAddr }: {
+function FlowScheme({ nodes, edges, rootId, balLine, onOpenAddr }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
   rootId?: string;
+  balLine?: string;
   onOpenAddr: (a: string) => void;
 }) {
   const root = nodes.find((n) => n.isRoot);
@@ -588,6 +607,7 @@ function FlowScheme({ nodes, edges, rootId, onOpenAddr }: {
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: '#55D6BE' }}>↓ {fmt(sumIn, 1)}</div>
           <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: '#F59E0B' }}>↑ {fmt(sumOut, 1)} {asset}</div>
+          {balLine && <div className="mono" style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 3 }}>баланс {balLine}</div>}
         </div>
       </div>
       <div className="fs-spine" />
