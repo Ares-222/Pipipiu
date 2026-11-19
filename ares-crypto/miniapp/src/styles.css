@@ -158,3 +158,30 @@ details.guide[open] summary::before { content: '▾ '; }
 .um-howto b { color: var(--text); }
 .um-foot { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border);
   font-size: 10px; color: var(--warn); line-height: 1.5; }
+
+/* ---------- v7.2: Схема потоков — новый вид по умолчанию вместо радиальной паутины ---------- */
+.fs-wrap { border: 1px solid var(--border); border-radius: 14px; padding: 12px 10px 10px;
+  background: radial-gradient(700px 300px at 50% 0%, #15151B 0%, #0F0F12 60%); }
+.fs-root { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px;
+  background: rgba(212, 0, 0, .08); border: 1.5px solid rgba(212, 0, 0, .55); box-shadow: 0 0 18px rgba(212, 0, 0, .22); }
+.fs-root-ico { font-size: 20px; flex-shrink: 0; }
+.fs-root-lab { font-size: 13px; font-weight: 800; word-break: break-all; }
+.fs-root-sub { font-size: 10.5px; color: var(--muted); margin-top: 2px; word-break: break-all; }
+.fs-spine { width: 2px; height: 16px; margin: 2px auto 0; border-radius: 2px;
+  background: linear-gradient(180deg, rgba(212, 0, 0, .8), rgba(120, 120, 140, .35)); }
+.fs-lane { margin-top: 10px; }
+.fs-lane-head { display: flex; align-items: center; gap: 7px; font-size: 12px; padding: 5px 9px;
+  border-left: 3px solid; background: #15151A; border-radius: 8px; }
+.fs-lane-head b { font-size: 12.5px; }
+.fs-empty { font-size: 11px; color: var(--muted); padding: 8px 10px; line-height: 1.5; }
+.fs-group { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; margin-top: 8px; }
+.fs-ghead { display: flex; align-items: center; gap: 6px; }
+.fs-gbar { height: 5px; background: #1C1C22; border-radius: 99px; overflow: hidden; margin-top: 7px; }
+.fs-gbar i { display: block; height: 100%; border-radius: 99px; }
+.fs-row { display: flex; align-items: center; gap: 8px; padding: 7px 2px 0; font-size: 12px; cursor: pointer; }
+.fs-addr { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info); }
+.fs-amt { font-weight: 700; flex-shrink: 0; }
+.fs-pct { color: var(--muted); font-size: 10.5px; width: 36px; text-align: right; flex-shrink: 0; }
+.fs-more { font-size: 10.5px; color: var(--muted); padding-top: 7px; margin-top: 8px; border-top: 1px solid var(--border); line-height: 1.4; }
+.fs-hop2 { font-size: 11px; color: var(--muted); margin-top: 10px; padding: 8px 10px; background: #141419;
+  border: 1px dashed var(--border); border-radius: 10px; line-height: 1.5; }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import cytoscape from 'cytoscape';
-import { fmt, short, categoryRu, categoryRuFull, categoryIcon, CAT_COLORS, DANGER_CATS, computeGraphVerdict, type WalletReport, type TraceResult, type GraphNode, type UnmixFinding } from '../api';
+import { fmt, short, categoryRu, categoryRuFull, categoryIcon, CAT_COLORS, DANGER_CATS, computeGraphVerdict, type WalletReport, type TraceResult, type GraphNode, type GraphEdge, type UnmixFinding } from '../api';
 import type { TraceResultLeak } from '../api';
 import { haptic } from '../tg';
 import { api } from '../api';
@@ -70,6 +70,9 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
   const [showLabels, setShowLabels] = useState(true);
   const [photoBusy, setPhotoBusy] = useState('');
   const [showDemoUnmix, setShowDemoUnmix] = useState(false);
+  // v7.2: вид графа. «Схема потоков» — новый наглядный вид по умолчанию (жалоба
+  // заказчика 19.11: радиальная паутина нечитаема); «Радар» — прежний cytoscape-вид.
+  const [viewMode, setViewMode] = useState<'scheme' | 'web'>('scheme');
 
   // v7 (№16/№17): фото расследования и потока средств в чат — рендер в клиенте,
   // воркер только релеит JPEG в sendPhoto. Красиво и наглядно, без скриншота webview.
@@ -147,7 +150,7 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
   );
 
   useEffect(() => {
-    if (!wrapRef.current || nodes.length === 0) return;
+    if (viewMode !== 'web' || !wrapRef.current || nodes.length === 0) return;
     const els = [
       ...nodes.map((n) => ({
         data: {
@@ -279,7 +282,7 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
     });
     cyRef.current = cy;
     return () => { clearInterval(pulseIv); cy.destroy(); cyRef.current = null; };
-  }, [trace, showLabels, topEdgeIdx]);
+  }, [trace, showLabels, topEdgeIdx, viewMode]);
 
   useEffect(() => {
     // min edge filter
@@ -326,6 +329,21 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
         </div>
       )}
 
+      {/* v7.2: переключатель вида — «Схема потоков» (по умолчанию; жалоба 19.11 на радиальную паутину) / «Радар» */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        <button className={viewMode === 'scheme' ? 'btn btn-red' : 'btn'} style={{ fontSize: 12, padding: '8px 10px', flex: 1 }} onClick={() => { haptic(); setViewMode('scheme'); }}>▦ Схема потоков</button>
+        <button className={viewMode === 'web' ? 'btn btn-red' : 'btn'} style={{ fontSize: 12, padding: '8px 10px', flex: 1 }} onClick={() => { haptic(); setViewMode('web'); }}>🕸 Радар связей</button>
+      </div>
+
+      {viewMode === 'scheme' ? (
+        <>
+          <div className="graph-hint" style={{ marginBottom: 8 }}>
+            <b>Схема потоков:</b> сверху — проверяемый кошелёк (ЦЕЛЬ); ниже — кто входит и куда уходят деньги, сгруппировано по типам адресов. Полоса = доля направления; «?» — тип угадан по потокам, не метка провайдера. Тапни адрес — откроется отчёт по нему. Полный круг связей — во «🕸 Радаре».
+          </div>
+          <FlowScheme nodes={nodes} edges={edges} rootId={rootId} onOpenAddr={onOpenAddr} />
+        </>
+      ) : (
+        <>
       {/* Визуальный язык графа — всегда на виду: размер, толщина, рамки, стрелки */}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
         <span className="glyph-chip">⭕ размер круга = оборот адреса</span>
@@ -363,8 +381,6 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
         <button className="btn" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => { setMinEdge(0); }}>Все суммы</button>
         <button className="btn" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => setMinEdge(1000)}>≥ 1000</button>
         <button className="btn" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => setMinEdge(10000)}>≥ 10k</button>
-        <button className="btn btn-red" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => void sendPhoto('graph')} disabled={photoBusy === 'graph'}>{photoBusy === 'graph' ? '…' : '📸 Граф в чат'}</button>
-        <button className="btn" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => void sendPhoto('flow')} disabled={photoBusy === 'flow'}>{photoBusy === 'flow' ? '…' : '📸 Поток в чат'}</button>
       </div>
       <div id="graph-wrap" ref={wrapRef} style={{
         height: 560,
@@ -404,6 +420,16 @@ export default function Graph({ report, trace, onOpenAddr, notify }: {
             </div>
           </div>
         )}
+      </div>
+        </>
+      )}
+
+      {/* Фото в чат: «Граф» — радар (вид «Радар»), «Поток» — схема root→leaks; рендер в клиенте */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+        {viewMode === 'web' && (
+          <button className="btn btn-red" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => void sendPhoto('graph')} disabled={photoBusy === 'graph'}>{photoBusy === 'graph' ? '…' : '📸 Граф в чат'}</button>
+        )}
+        <button className="btn btn-red" style={{ fontSize: 11, padding: '7px 10px' }} onClick={() => void sendPhoto('flow')} disabled={photoBusy === 'flow'}>{photoBusy === 'flow' ? '…' : '📸 Поток в чат'}</button>
       </div>
 
       {/* v7: структурная картина — то, что отличает «распутывание» от веера вылетов */}
@@ -511,6 +537,103 @@ function LeakCard({ l, rank, onOpenAddr }: {
           <div style={{ width: `${pct}%`, height: '100%', background: danger ? 'var(--danger)' : col }} />
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------- v7.2: СХЕМА ПОТОКОВ — новый вид по умолчанию вместо радиальной паутины ----------
+// ЦЕЛЬ сверху; ниже два потока (входят/уходят), контрагенты сгруппированы по типам
+// адресов, полоса = доля направления. Отвечает на «куда уходят деньги» без чтения паутины.
+function flowGroups(nodes: GraphNode[], list: GraphEdge[], side: 'in' | 'out') {
+  const map = new Map<string, { cat: string; subtotal: number; rows: { n: GraphNode; amount: number; probable: boolean }[] }>();
+  for (const e of list) {
+    const n = nodes.find((x) => x.id === (side === 'in' ? e.from : e.to));
+    if (!n) continue;
+    const cat = n.category ?? 'personal';
+    const g = map.get(cat) ?? { cat, subtotal: 0, rows: [] };
+    g.subtotal += e.amount;
+    g.rows.push({ n, amount: e.amount, probable: !!e.probable || !!n.probable });
+    map.set(cat, g);
+  }
+  return [...map.values()]
+    .map((g) => ({ ...g, rows: g.rows.sort((a, b) => b.amount - a.amount) }))
+    .sort((a, b) => b.subtotal - a.subtotal);
+}
+
+function FlowScheme({ nodes, edges, rootId, onOpenAddr }: {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  rootId?: string;
+  onOpenAddr: (a: string) => void;
+}) {
+  const root = nodes.find((n) => n.isRoot);
+  const asset = edges[0]?.asset ?? '';
+  const inE = edges.filter((e) => e.to === rootId);
+  const outE = edges.filter((e) => e.from === rootId);
+  const sumIn = inE.reduce((s, e) => s + e.amount, 0);
+  const sumOut = outE.reduce((s, e) => s + e.amount, 0);
+  const hop2 = edges.filter((e) => e.from !== rootId && e.to !== rootId);
+  const lanes: { key: 'in' | 'out'; title: string; icon: string; color: string; list: GraphEdge[]; sum: number; noun: string }[] = [
+    { key: 'in', title: 'Входят', icon: '▼', color: '#55D6BE', list: inE, sum: sumIn, noun: 'источников' },
+    { key: 'out', title: 'Уходят', icon: '▲', color: '#F59E0B', list: outE, sum: sumOut, noun: 'получателей' },
+  ];
+  return (
+    <div className="fs-wrap">
+      <div className="fs-root">
+        <div className="fs-root-ico">🎯</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="fs-root-lab">{root?.label ?? 'ЦЕЛЬ'}{root?.probable ? ' ?' : ''}</div>
+          <div className="mono fs-root-sub">{short(root?.addr ?? '', 10, 8)} · {(root?.chain ?? '').toUpperCase()} · tx {root?.txCount ?? 0}</div>
+        </div>
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: '#55D6BE' }}>↓ {fmt(sumIn, 1)}</div>
+          <div className="mono" style={{ fontSize: 12, fontWeight: 700, color: '#F59E0B' }}>↑ {fmt(sumOut, 1)} {asset}</div>
+        </div>
+      </div>
+      <div className="fs-spine" />
+      {lanes.map((lane) => {
+        const groups = flowGroups(nodes, lane.list, lane.key);
+        return (
+          <div className="fs-lane" key={lane.key}>
+            <div className="fs-lane-head" style={{ borderLeftColor: lane.color }}>
+              <span style={{ color: lane.color, fontWeight: 800 }}>{lane.icon}</span>
+              <b>{lane.title}</b>
+              <span className="mono">{fmt(lane.sum, 1)} {asset}</span>
+              <span style={{ color: 'var(--muted)', marginLeft: 'auto' }}>· {lane.list.length} {lane.noun}</span>
+            </div>
+            {lane.list.length === 0 && (
+              <div className="fs-empty">Прямых {lane.key === 'in' ? 'входящих' : 'исходящих'} переводов в этой выборке не видно — все связи цели идут через посредников (круги 2-го порядка, см. «🕸 Радар»).</div>
+            )}
+            {groups.map((g) => {
+              const share = lane.sum > 0 ? Math.round((g.subtotal / lane.sum) * 100) : 0;
+              const col = CAT_COLORS[g.cat] ?? '#9CA3AF';
+              const anyProb = g.rows.some((r) => r.probable);
+              const shown = g.rows.slice(0, 4);
+              return (
+                <div className="fs-group" key={g.cat}>
+                  <div className="fs-ghead">
+                    <span style={{ fontSize: 14 }}>{categoryIcon(g.cat)}</span>
+                    <span style={{ color: col, fontWeight: 700, fontSize: 12.5 }}>{categoryRuFull(g.cat, anyProb)}</span>
+                    <span className="mono" style={{ marginLeft: 'auto', fontSize: 12 }}>{fmt(g.subtotal, 1)} · {share}%</span>
+                  </div>
+                  <div className="fs-gbar"><i style={{ width: `${Math.max(3, share)}%`, background: col }} /></div>
+                  {shown.map((r, i) => (
+                    <div className="fs-row" key={i} onClick={() => { haptic(); onOpenAddr(r.n.addr); }}>
+                      <span className="mono fs-addr">{r.n.label ?? short(r.n.addr, 6, 4)}{r.probable ? ' ?' : ''}</span>
+                      <span className="mono fs-amt">{fmt(r.amount, 1)}</span>
+                      <span className="fs-pct">{lane.sum > 0 ? Math.round((r.amount / lane.sum) * 100) : 0}%</span>
+                    </div>
+                  ))}
+                  {g.rows.length > 4 && <div className="fs-more">+{g.rows.length - 4} адресов в этой группе — полный список в «🕸 Радаре» и PDF</div>}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+      {hop2.length > 0 && (
+        <div className="fs-hop2">🔗 Через посредников минуя цель: {hop2.length} связей (2-й круг). Кто именно и с какими суммами — переключись на «🕸 Радар связей».</div>
+      )}
     </div>
   );
 }
