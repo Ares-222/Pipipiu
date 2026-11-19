@@ -466,3 +466,64 @@
   Report.tsx — баннер «прошлая проверка N/100 · изменилось ±X».
 - Смоки: scripts/test-share-digest.ts — SMOK OK (diff/trace-история/порог/digest/share-HTML);
   test-live-checks — ✅; miniapp tsc exit 0, vite build OK.
+
+## 19.11 — Пакет v7 (13 идей заказчика + PDF-редизайн + картина расследования)
+Список решений заказчика: №1,3,4,5,6,7,8,9,12,14,15,16,17,19,23,24,25,26(как улучшающий),27 — «делаем»;
+№2,10,11,13,18,20,21,22 — отклонены.
+
+- **№1 Датасеты меток**: scripts/build-datasets-import.py (в репо) + scripts/labels-v7.sql →
+  прод-D1 через `wrangler d1 execute ares --remote`. Источники: dawsbot/eth-labels (словарь
+  etherscan), forta-network/labelled-datasets (фишинг/эксплойтеры), brianleect/etherscan-labels
+  (дамп тегов). Импортировано ~59k: labels 31,442 → **90,786** (cex 31.8k / service 21.3k /
+  scam 13.6k / mixer 1.6k / bridge 579), aml_sources +8,031 (scam=high, mixer=critical).
+  Дефилима-hacks — адресов в открытом API нет, честно пропущен. Дневной лимит D1 rows_written
+  исчерпан (~148k с индексами) → записи в D1 деградируют до 00:00 UTC: /report и /graph
+  защищены try/catch (работают без записи квот/истории) — hardening оставлен навсегда.
+- **№6/7/15 structure в трейсере**: engine/insights.ts — detectPeelChains (эвристика
+  «раздевания», доминирующий переход ≥60%), detectCommonFunders, bridgeFinding (+ hints
+  сетей Stargate/Across/Hop/… по меткам), structureFindings. TraceResult.structure +
+  node.peel/node.assoc. Смок scripts/test-insights.ts — **SMOK OK** (10/10).
+- **№9/12 в отчёте**: activityFingerprint (гистограмма 24ч UTC + честная подсказка пояса,
+  null на <12 tx) и dustFinding (≥10 входов <$2 с ≥5 адресов) → ChainReport.activity,
+  Finding dust-attack. Блок в Report.tsx + секция в PDF.
+- **№16/17 фото в чат**: miniapp/graphPhoto.ts (радар-композиция: ядро ЦЕЛЬ, кольца,
+  суммы на топ-рёбрах, легенда, structure-строки, вердикт) и flowPhoto.ts (root→leaks,
+  толщина стрелки = доля) — canvas-рендер в клиенте, отправка через существующий
+  POST /api/render (воркер = релей). Кнопки «📸 Граф в чат» / «📸 Поток в чат» в Graph.tsx.
+- **№3 TON DEX**: adapters/ton.ts — JettonSwap (dex/router/routes) → tx с memo
+  «swap DEX: X → Y», контрагент-роутер; isParty() для raw/friendly.
+- **№4 tonsearch**: engine/tonsearch.ts + GET /api/tonsearch + /tonsearch в боте
+  (memo=… amount=… days=…; 1 fetch из кэша tx-страницы).
+- **№8 multichain**: GET /api/multichain (eth/bsc/polygon, cachedJson prof:*) + команда
+  /multichain + блок в Report.tsx (кнопка «🌐 Мультичейн-сводка»).
+- **№14 compare**: engine/compare.ts + GET /api/compare + /compare в боте (общие
+  контрагенты, общий источник/получатель, 2 fetch из KV-кэша).
+- **№19 CSV**: кнопка «🧾 CSV транзакций в чат» в Report.tsx → POST /api/pdf {csv} →
+  sendDocument(text/csv); JSON-экспорт сохранён как был.
+- **№23 /me**: GET /api/me (лимиты+использовано+watches+resetAt) + дашборд-бары в Settings.tsx.
+- **№24 KV-кэш отчёта**: GET /api/report — кэш `rep:<addr>` TTL 15 мин; хит отдаёт
+  {cached:true} и НЕ списывает квоту; ?force=1 (кнопка Обновить) — свежий путь + список
+  квоты. Живой смок: второй вызов cached:true, тот же createdAt.
+- **№25 seed графа**: /api/graph читает свежий rep-кэш → runTrace({seedTxs}) — история цели
+  без fetch (живой смок: fetchesUsed 2/28 на depth 1).
+- **№27 адаптивный mixindex**: latest-блок кэшируется в KV 15 мин; синхронизированная
+  цепь завершает проход без внешних вызовов.
+- **№5 freeze-алерты**: monitorCycle проверяет isBlackListed (кэш 6ч) для tron/eth watch;
+  алерт один раз на эпизод (гвард fzNotified в состоянии watch).
+- **PDF-редизайн**: сквозная нумерация разделов, бейдж вердикта + «Что внутри» на обложке,
+  секция «Отпечаток активности» (24 бара), «Обозначения и как читать» (9 пунктов:
+  цвета, пил-чейн, мост, пыль, общий источник, «?», unmix H1/H2/H3, сходимость, кэш),
+  глоссарий +2 термина. tsc exit 0, vite build OK (bundle **index-YI27j7QT.js**).
+- **Бот**: /tonsearch, /compare, /multichain, /quota, обновлён /help; sendDocument —
+  параметр mime (text/csv).
+- **Деплой 19.11**: коммит cda2d55 → wrangler deploy Version `5a53ddd0-6130-4fb4-93a6-455ae7e085bb`.
+  Верификация §4: живой бандл index-YI27j7QT.js = локальному, healthz {ok:true},
+  cache-control no-cache/no-store/must-revalidate.
+- **Живые смоки прод-API** (scripts/tg_client.py восстановлен, CF WAF требует браузерный
+  UA — error 1010): /me OK; /report TRKhSYVu… score/50 tx/activity/prev OK, повтор
+  cached:true; /graph 0x9c514fc4… depth1: unmix 3 связи H3·FIFO, fetchesUsed 2/28;
+  /multichain: eth 0.0085/bsc 0/polygon 0; /compare: common 1, funders 1; /tonsearch
+  без параметров — честный 400. Утверждено: POST /api/render и /pdf не менялись —
+  фото-пайплайн совместим.
+- Урок: `/tmp/ds` клонировать датасеты заново при переимпорте; GITHUB PAT из паспорта
+  жив (проверено /user → Ares-222), sandbox-токен CF активен (tokens/verify → active).
